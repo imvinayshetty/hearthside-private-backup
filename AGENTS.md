@@ -33,4 +33,6 @@ use the editor.
 - Keep Vault-compatible path and naming validation in `src/lib/backup-rules.ts` with concrete tests so mobile setup follows the companion's storage rules.
 - Separate real enrollment readiness from the simulated phone flow; never treat draft setup, browser identity or demo MFA as verified native phone enrollment.
 - Connect backup data only through a native local transport after identity and certificate verification; the hosted app must never proxy backup bytes or claim an unavailable Vault protocol exists.
+- Keep the independently installable Python LAN service in `public/local-vault` with protocol documentation and security tests; never run it inside hosted SSR because it requires a trusted local computer and drive.
+- Keep Login, pairing and Backups as separate content routes sharing memory-only connection context; native secure storage owns device credentials, not browser storage.
 <!-- AGENT-MEMORY:END -->
