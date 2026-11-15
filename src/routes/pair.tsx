@@ -34,7 +34,8 @@ function PairPage() {
         setWifi(result.wifi); setNetwork(result.name || "Home network");
         if (!result.wifi) return;
         const vaults = await bridge.discover();
-        if (live && vaults.length === 1) { setAddress(localVaultAddress(vaults[0].address)); setFingerprint(vaults[0].fingerprint); }
+        const vault = vaults.length === 1 ? vaults[0] : undefined;
+        if (live && vault) { setAddress(localVaultAddress(vault.address)); setFingerprint(vault.fingerprint); }
       } catch { /* No browser claim of Wi-Fi discovery or verified identity. */ }
     }
     void load(); return () => { live = false; };
