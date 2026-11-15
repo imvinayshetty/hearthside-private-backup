@@ -144,7 +144,7 @@ function StatusStrip({ wifi, drive, setWifi, setDrive }: { wifi: boolean; drive:
     <div role="status" className={cn("sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-ink/5 px-5 py-2 text-[12px] font-medium backdrop-blur", wifi ? "bg-ground/90 text-sagedeep" : "bg-warnsoft/95 text-warn")}>
       <span className="flex items-center gap-2">
         {wifi ? <Wifi size={14} /> : <WifiOff size={14} />}
-        {wifi ? "Local network only · Home-WiFi-5G · 0 WAN bytes" : "Wi-Fi lost · backups paused · still nothing sent online"}
+        {wifi ? <>Local network only<span className="hidden sm:inline"> · Home-WiFi-5G</span> · 0 WAN bytes</> : "Wi-Fi lost · backup on hold · nothing sent online"}
       </span>
       <details className="relative">
         <summary className="cursor-pointer list-none rounded-full px-2 py-0.5 text-slate hover:bg-sagesoft">Simulate</summary>
@@ -345,7 +345,7 @@ function Selection(p: FlowProps) {
     <>
       <header className="flex items-center justify-between gap-2 px-5 pt-6">
         <button aria-label="Back" onClick={() => setStep("mfa")} className="grid h-10 w-10 place-items-center rounded-full hover:bg-sagesoft"><ChevronLeft size={22} /></button>
-        <h1 className="font-display text-[26px] tracking-tight">Choose what to keep</h1>
+        <h1 className="whitespace-nowrap font-display text-[23px] tracking-tight">Choose what to keep</h1>
         <Pill className="py-1"><Lock size={12} />Offline</Pill>
       </header>
       <main className="space-y-3 px-5 pb-32 pt-6">
