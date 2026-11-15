@@ -1,23 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { HomeSafe } from "@/components/homesafe/HomeSafe";
 
-// The home route ships no og:image, so serve-time hosting can inject the
-// project's social preview (explicit og:image or latest screenshot).
 export const Route = createFileRoute("/")({
-  component: Index,
+  head: () => ({
+    meta: [
+      { title: "HomeSafe — Private phone backup on your home Wi-Fi" },
+      { name: "description", content: "Back up your phone to a drive at home. Local Wi-Fi only, two-factor unlock, zero cloud." },
+      { property: "og:title", content: "HomeSafe — Private phone backup on your home Wi-Fi" },
+      { property: "og:description", content: "Back up your phone to a drive at home. Local Wi-Fi only, two-factor unlock, zero cloud." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
+    ],
+  }),
+  component: HomeSafe,
 });
-
-// IMPORTANT: Replace this placeholder. See ./README.md for routing conventions.
-function Index() {
-  return (
-    <div
-      className="flex min-h-screen items-center justify-center"
-      style={{ backgroundColor: "#fcfbf8" }}
-    >
-      <img
-        data-lovable-blank-page-placeholder="REMOVE_THIS"
-        src="https://cdn.gpteng.co/blank-app-v1.svg"
-        alt="Your app will live here!"
-      />
-    </div>
-  );
-}
