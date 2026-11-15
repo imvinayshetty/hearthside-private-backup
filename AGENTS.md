@@ -28,3 +28,9 @@ use the editor.
   own key and store it in Secrets.
 - **Secrets.** Lovable manages them. Do not put secret values in the repo.
 <!-- LOVABLE:END -->
+
+<!-- AGENT-MEMORY:BEGIN -->
+- Keep Vault-compatible path and naming validation in `src/lib/backup-rules.ts` with concrete tests so mobile setup follows the companion's storage rules.
+- Separate real enrollment readiness from the simulated phone flow; never treat draft setup, browser identity or demo MFA as verified native phone enrollment.
+- Connect backup data only through a native local transport after identity and certificate verification; the hosted app must never proxy backup bytes or claim an unavailable Vault protocol exists.
+<!-- AGENT-MEMORY:END -->
