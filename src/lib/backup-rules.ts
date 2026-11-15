@@ -40,3 +40,24 @@ export function localVaultAddress(value: string): string {
   }
   return url.origin;
 }
+// Approved hierarchy: HomeSafeBckup / <profile> / <phone> / <Kind>_Bckup_DDMMYY
+export function backupPath(profile: string, phone: string, backup: string): string {
+  return [ROOT_FOLDER, safeSegment(profile), safeSegment(phone), safeSegment(backup)].join("/");
+}
+// Phone names are unique per profile (case-insensitive); a duplicate never creates a second folder.
+export function requireNewPhoneName(name: string, existing: string[]): string {
+  const clean = safeSegment(name);
+  if (existing.some(n => n.toLowerCase() === clean.toLowerCase())) throw new Error("That phone name is already used in this profile. Choose a different name on your Vault.");
+  return clean;
+}
+// Local email is an account identifier only; Vault confirms registration.
+export function vaultEmail(value: string): string {
+  const email = value.trim().toLowerCase();
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter the email address you registered on your Vault.");
+  return email;
+}
+export function pairingCode(value: string): string {
+  const code = value.replace(/\s/g, "");
+  if (!/^\d{6}$/.test(code)) throw new Error("Enter the six-digit pairing code shown on your Vault.");
+  return code;
+}

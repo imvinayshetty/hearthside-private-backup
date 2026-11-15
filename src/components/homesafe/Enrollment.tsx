@@ -1,60 +1,90 @@
 import { useEffect, useState } from "react";
-import { HardDrive, Shield, Smartphone, AlertTriangle } from "lucide-react";
-import { ROOT_FOLDER, defaultBackupName, localVaultAddress, safeSegment, validateBackupName, type BackupKind } from "@/lib/backup-rules";
+import { HardDrive, Shield, Smartphone, AlertTriangle, Wifi, QrCode, Keyboard, Loader2 } from "lucide-react";
+import { ROOT_FOLDER, defaultBackupName, localVaultAddress, pairingCode, vaultEmail, type BackupKind } from "@/lib/backup-rules";
+import { cn } from "@/lib/utils";
 import { Display, GhostButton, Pill, PrimaryButton } from "./ui";
 
+type Method = "wifi" | "qr" | "manual";
+type Outcome = null | "checking" | "unavailable";
+
 export function Enrollment({ onDemo }: { onDemo: () => void }) {
-  const [profile, setProfile] = useState("");
+  const [method, setMethod] = useState<Method>("manual");
+  const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
+  const [code, setCode] = useState("");
   const [kind, setKind] = useState<BackupKind>("Full");
-  const [name, setName] = useState("");
   const [today, setToday] = useState<Date | null>(null);
-  const [platform, setPlatform] = useState("Android");
   const [error, setError] = useState("");
-  const [prepared, setPrepared] = useState(false);
-  useEffect(() => { const date = new Date(); setToday(date); setName(defaultBackupName("Full", date)); }, []);
+  const [note, setNote] = useState("");
+  const [outcome, setOutcome] = useState<Outcome>(null);
+  useEffect(() => setToday(new Date()), []);
   const inputClass = "mt-2 min-h-12 w-full rounded-md border border-ink/15 bg-card px-3 text-ink outline-none focus:border-sage";
-  function prepare() {
-    setError(""); setPrepared(false);
-    try {
-      const cleanProfile = safeSegment(profile);
-      const cleanAddress = localVaultAddress(address);
-      const date = new Date();
-      if (!today || defaultBackupName(kind, today) !== defaultBackupName(kind, date)) {
-        setToday(date); setName(defaultBackupName(kind, date)); throw new Error("The date changed. Review the new backup name and try again.");
-      }
-      const cleanName = validateBackupName(name, kind, date);
-      setProfile(cleanProfile); setAddress(cleanAddress); setName(cleanName); setPrepared(true);
-    } catch (e) { setError(e instanceof Error ? e.message : "Check your setup details."); }
+
+  async function pick(next: Method) {
+    setMethod(next); setError(""); setNote(""); setOutcome(null);
+    if (next === "wifi") setNote("Finding your Vault on home Wi-Fi needs the installed HomeSafe app for Android or iPhone. Enter the address shown on your Vault instead.");
+    if (next === "qr") {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error();
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        stream.getTracks().forEach(t => t.stop());
+        setNote("Camera allowed. Reading the Vault's pairing QR needs the installed HomeSafe app. Type the address and code below for now.");
+      } catch { setNote("Camera access was not allowed. Type the Vault's local address and six-digit code instead."); }
+      setMethod("manual");
+    }
   }
+
+  function connect() {
+    setError(""); setOutcome(null);
+    try {
+      vaultEmail(email); localVaultAddress(address); pairingCode(code);
+      setOutcome("checking");
+      setTimeout(() => setOutcome("unavailable"), 900);
+    } catch (e) { setError(e instanceof Error ? e.message : "Check your details."); }
+  }
+
+  const backup = today ? defaultBackupName(kind, today) : `${kind}_Bckup_DDMMYY`;
+  const methods: { id: Method; label: string; icon: typeof Wifi }[] = [
+    { id: "wifi", label: "Find on Wi-Fi", icon: Wifi }, { id: "qr", label: "Scan QR", icon: QrCode }, { id: "manual", label: "Type address", icon: Keyboard },
+  ];
+  const profilePreview = "<profile>";
+
   return (
     <div className="min-h-screen bg-ground text-ink">
       <header className="border-b border-ink/10 px-5 py-4"><div className="mx-auto flex max-w-4xl items-center gap-2 font-semibold"><Shield size={20} className="text-sagedeep" />HomeSafe <span className="ml-auto text-sm font-normal text-slate">Phone & tablet</span></div></header>
       <main className="mx-auto max-w-4xl px-5 py-8 md:py-12">
-        <Pill><Smartphone size={15} />Not enrolled</Pill>
-        <Display className="mt-5">Connect to HomeSafe Vault</Display>
-        <div className="mt-6 border-l-2 border-warn pl-4 text-sm">
-          <p className="font-medium">Phone connection service is not installed</p>
-          <p className="mt-2 leading-6 text-slate">HomeSafe Vault currently saves files selected on the computer. Android and iOS enrollment, biometric verification and Wi-Fi transfers are not available yet. Nothing will be sent or written from this screen.</p>
+        <Pill><Smartphone size={15} />Not paired</Pill>
+        <Display className="mt-5">Connect to your Vault</Display>
+        <p className="mt-3 max-w-xl text-sm leading-6 text-slate">Use the email you registered on your Vault. Your profile and phone name are chosen there — this phone never creates a second account.</p>
+
+        <div role="radiogroup" aria-label="How to connect" className="mt-8 grid gap-3 sm:grid-cols-3">
+          {methods.map(m => (
+            <button key={m.id} type="button" role="radio" aria-checked={method === m.id} onClick={() => pick(m.id)}
+              className={cn("flex min-h-14 items-center gap-3 rounded-xl border px-4 text-left font-medium", method === m.id ? "border-sage bg-sagesoft" : "border-ink/15 bg-card")}>
+              <m.icon size={18} className="text-sagedeep" />{m.label}
+            </button>
+          ))}
         </div>
-        <form onSubmit={e => { e.preventDefault(); prepare(); }} onChange={() => setPrepared(false)} className="mt-8 grid gap-8 md:grid-cols-2">
+        {note && <p role="status" className="mt-4 border-l-2 border-warn pl-4 text-sm leading-6 text-slate">{note}</p>}
+
+        <form onSubmit={e => { e.preventDefault(); connect(); }} className="mt-8 grid gap-8 md:grid-cols-2">
           <section className="space-y-5">
-            <h2 className="text-lg font-semibold">Device enrollment</h2>
-            <label className="block text-sm">Device type<select aria-label="Device type" className={inputClass} value={platform} onChange={e => setPlatform(e.target.value)}><option>Android</option><option>iPhone</option><option>iPad</option><option>Android tablet</option></select></label>
-            <label className="block text-sm">Profile name<input aria-label="Profile name" className={inputClass} value={profile} onChange={e => setProfile(e.target.value)} placeholder="Your name" maxLength={80} required /></label>
+            <label className="block text-sm">Vault account email<input aria-label="Vault account email" type="email" className={inputClass} value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" autoCapitalize="none" required /></label>
             <label className="block text-sm">Local Vault address<input aria-label="Local Vault address" className={inputClass} value={address} onChange={e => setAddress(e.target.value)} placeholder="https://192.168.1.108:7443" autoCapitalize="none" autoCorrect="off" required /></label>
+            <label className="block text-sm">Pairing code from Vault<input aria-label="Pairing code" inputMode="numeric" maxLength={7} className={cn(inputClass, "font-mono tracking-[0.3em]")} value={code} onChange={e => setCode(e.target.value)} placeholder="000000" required /></label>
+            <p className="text-xs leading-5 text-slate">This is the one-time code your Vault shows after you sign in and pick a phone — not your Authy login code.</p>
           </section>
           <section className="space-y-5">
-            <h2 className="flex items-center gap-2 text-lg font-semibold"><HardDrive size={18} />Backup destination</h2>
-            <label className="block text-sm">Backup type<select aria-label="Backup type" className={inputClass} value={kind} onChange={e => { const next = e.target.value as BackupKind; setKind(next); if (today) setName(defaultBackupName(next, today)); }}><option value="Full">Full</option><option value="Custom">Custom</option></select></label>
-            <label className="block text-sm">Backup name<input aria-label="Backup name" className={inputClass} value={name} onChange={e => setName(e.target.value)} required maxLength={80} /></label>
-            <p className="break-all font-mono text-sm text-sagedeep">{ROOT_FOLDER}/{profile.trim() || "<profile>"}/{name || "<backup>"}/</p>
-            <p className="text-sm leading-6 text-slate">Existing backups are never overwritten. Another backup on the same date requires a unique suffix. Existing names and drive access must be checked by the Vault before any write.</p>
+            <h2 className="flex items-center gap-2 text-lg font-semibold"><HardDrive size={18} />Backups go to</h2>
+            <p className="break-all font-mono text-sm text-sagedeep">{ROOT_FOLDER} / {profilePreview} / &lt;phone name&gt; / {backup}</p>
+            <label className="block text-sm">Backup type<select aria-label="Backup type" className={inputClass} value={kind} onChange={e => setKind(e.target.value as BackupKind)}><option value="Full">Full</option><option value="Custom">Custom</option></select></label>
+            <p className="text-sm leading-6 text-slate">Full backup includes only files this phone allows HomeSafe to read. Existing backups are never overwritten; another backup on the same date needs a unique suffix.</p>
           </section>
           <div className="md:col-span-2">
             {error && <p role="alert" className="mb-4 text-sm text-destructive">{error}</p>}
-            {prepared && <div role="status" className="mb-5 border border-ink/10 p-4"><p className="flex items-center gap-2 font-medium"><AlertTriangle size={18} className="text-warn" />Setup details checked — enrollment pending</p><p className="mt-2 text-sm leading-6 text-slate">{platform} · {profile}. No device identity has been created or verified. Complete enrollment after the local Vault service and native phone connection are installed.</p></div>}
-            <div className="flex flex-col gap-3 sm:flex-row"><PrimaryButton type="submit">Check setup details</PrimaryButton><GhostButton type="button" onClick={onDemo}>Open demo</GhostButton></div>
+            {outcome === "checking" && <p role="status" className="mb-4 flex items-center gap-2 text-sm"><Loader2 size={16} className="animate-spin" />Contacting your Vault…</p>}
+            {outcome === "unavailable" && <div role="alert" className="mb-5 border border-ink/10 p-4"><p className="flex items-center gap-2 font-medium"><AlertTriangle size={18} className="text-warn" />Vault unavailable — not paired</p><p className="mt-2 text-sm leading-6 text-slate">Your Vault's phone connection service isn't installed yet, so this phone can't confirm your account, profile or phone name. Nothing was sent or saved. Check the Vault is on, on the same Wi-Fi, and has phone pairing turned on.</p></div>}
+            <div className="flex flex-col gap-3 sm:flex-row"><PrimaryButton type="submit" disabled={outcome === "checking"}>Pair with Vault</PrimaryButton><GhostButton type="button" onClick={onDemo}>Open demo</GhostButton></div>
           </div>
         </form>
       </main>

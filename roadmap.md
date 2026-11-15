@@ -1,8 +1,7 @@
 # Phone enrollment and local Vault integration
 
 - [x] Inspect HomeSafe Vault's current implementation and backup rules.
-- [x] Share and test profile, root-folder, dated-name and no-overwrite rules.
-- [x] Add phone/tablet setup with private-address validation and truthful enrollment status.
-- [x] Separate the existing simulated experience from real setup.
-- [ ] Native device identity, biometric authentication and certificate pinning — requires native companion software not present in either project.
-- [ ] End-to-end LAN enrollment and hard-drive backup — requires a local Vault service; the referenced Vault currently offers browser folder backups only and cannot be changed from this project.
+- [x] Share and test profile, phone, dated-name and no-overwrite rules.
+- [x] Approved pairing plan: Wi-Fi/QR/typed-address options, Vault email, pairing code, profile/phone destination path, truthful "Vault unavailable" state.
+- [ ] Confirm profile & phone, reconnect, saved-backup filters — need the Vault's phone connection service to supply real data.
+- [ ] Native discovery, QR reading, device identity, certificate pinning — require installed Android/iPhone apps.
