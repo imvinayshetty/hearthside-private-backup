@@ -110,7 +110,7 @@ function useSync({ wifi, drive, total, differential, dedupe }: { wifi: boolean; 
       setTick((x) => x + 1);
       setFileProg((p) => {
         const np = p + 0.18 + Math.random() * 0.2;
-        if (np >= 1) { setFileIdx((i) => { const ni = (i + 1) % FILES.length; log(`OK   ${FILES[i][0]} committed`); return ni; }); return 0; }
+        if (np >= 1) { setFileIdx((i) => { const ni = (i + 1) % FILES.length; log(`OK   ${FILES[i]?.[0] ?? "file"} committed`); return ni; }); return 0; }
         return np;
       });
       setDone((d) => {
@@ -416,7 +416,7 @@ function Ring({ pct }: { pct: number }) {
 function SyncScreen({ sync, setStep, encrypt }: FlowProps) {
   const [logsOpen, setLogsOpen] = useState(false);
   const pct = sync.total ? Math.floor((sync.done / sync.total) * 100) : 0;
-  const file = FILES[sync.fileIdx];
+  const file = FILES[sync.fileIdx] ?? FILES[0];
   const st = sync.blocked ? "Waiting" : sync.status === "running" ? "Syncing" : sync.status === "paused" ? "Paused" : sync.status === "done" ? "Complete" : "Cancelled";
 
   if (sync.status === "done" || sync.status === "cancelled") {
