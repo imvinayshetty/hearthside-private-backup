@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ShieldCheck, Lock, LockOpen, HardDrive, QrCode, ChevronLeft, Check, Image as ImageIcon, User, FileText, Plus,
   Shield, Pause, Play, X, ScrollText, WifiOff, Wifi, ScanFace, Loader2, AlertTriangle, History, RotateCcw,
@@ -573,7 +573,7 @@ function SnapshotExplorer({ snapshots, drive, compact }: { snapshots: Snapshot[]
   );
 }
 
-function Empty({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
+function Empty({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
   return <div className="rounded-[20px] border border-dashed border-ink/15 p-6 text-center"><div className="mx-auto grid h-10 w-10 place-items-center rounded-full bg-sagesoft text-sagedeep">{icon}</div><div className="mt-3 text-[14.5px] font-medium">{title}</div><div className="mt-1 text-[13px] text-slate">{body}</div></div>;
 }
 
@@ -641,9 +641,9 @@ function Dashboard({ wifi, drive, setWifi, setDrive, paired, snapshots, devices,
     </div>
   );
 }
-function PanelTitle({ icon, title }: { icon: React.ReactNode; title: string }) {
+function PanelTitle({ icon, title }: { icon: ReactNode; title: string }) {
   return <div className="flex items-center gap-2 text-[14px] font-semibold"><span className="grid h-7 w-7 place-items-center rounded-full bg-sagesoft text-sagedeep">{icon}</span>{title}</div>;
 }
-function Stat({ icon, k, v }: { icon: React.ReactNode; k: string; v: string }) {
+function Stat({ icon, k, v }: { icon: ReactNode; k: string; v: string }) {
   return <div className="rounded-2xl bg-ground p-3"><div className="flex justify-center text-sage">{icon}</div><div className="mt-1 text-slate">{k}</div><div className="font-medium">{v}</div></div>;
 }
