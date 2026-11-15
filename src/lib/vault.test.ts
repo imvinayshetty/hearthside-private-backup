@@ -5,8 +5,8 @@ describe("backup selection", () => {
   it("all three sources total 136.4 GB", () => {
     expect(selectedGb({ photos: true, contacts: true, documents: true })).toBe(136.4);
   });
-  it("only documents is 23.9 GB", () => {
-    expect(selectedGb({ photos: false, contacts: false, documents: true })).toBe(23.9);
+  it("only photos is 112.4 GB", () => {
+    expect(selectedGb({ photos: true, contacts: false, documents: false })).toBe(112.4);
   });
   it("nothing selected cannot start, over-capacity cannot start", () => {
     expect(fitsOnDrive(0)).toBe(false);

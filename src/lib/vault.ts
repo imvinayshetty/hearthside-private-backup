@@ -4,7 +4,7 @@ export interface Source { id: SourceId; name: string; meta: string; gb: number; 
 export const SOURCES: Source[] = [
   { id: "photos", name: "Photos & Videos", meta: "14,200 files · 112.4 GB", gb: 112.4, items: 14200 },
   { id: "contacts", name: "Contacts & Calendars", meta: "840 entries · 42 MB", gb: 0.042, items: 840 },
-  { id: "documents", name: "Documents", meta: "23.9 GB", gb: 23.9, items: 2310 },
+  { id: "documents", name: "Documents", meta: "23.9 GB", gb: 23.96, items: 2310 },
 ];
 
 export const FOLDERS = [
