@@ -65,12 +65,7 @@ export function HomeSafe() {
     <div className="min-h-screen bg-ground text-ink">
       <StatusStrip wifi={wifi} drive={drive} setWifi={setWifi} setDrive={setDrive} />
       <div className="mx-auto max-w-[1280px] lg:grid lg:grid-cols-[1fr_420px] lg:gap-8 lg:px-8 lg:py-8">
-        <div className="order-2 hidden lg:block">
-          <div className="sticky top-14 overflow-hidden rounded-[32px] border border-ink/5 bg-ground shadow-[0_20px_50px_-24px_rgba(47,54,51,0.35)]" style={{ height: 764 }}>
-            <div className="h-full overflow-y-auto">{phone}</div>
-          </div>
-        </div>
-        <div className="mx-auto max-w-[440px] lg:hidden">{phone}</div>
+        <div className="mx-auto max-w-[440px] lg:sticky lg:top-14 lg:order-2 lg:h-[764px] lg:w-full lg:max-w-none lg:overflow-y-auto lg:rounded-[32px] lg:border lg:border-ink/5 lg:shadow-[0_20px_50px_-24px_rgba(47,54,51,0.35)]">{phone}</div>
         <div className="order-1 px-5 pb-10 md:px-8 lg:px-0 lg:pb-0">
           <Dashboard {...{ wifi, drive, setWifi, setDrive, paired, snapshots, devices, setDevices, sync }} />
         </div>
