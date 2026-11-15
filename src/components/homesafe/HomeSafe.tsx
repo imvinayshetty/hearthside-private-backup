@@ -13,6 +13,7 @@ import {
   type SourceId, type Snapshot,
 } from "@/lib/vault";
 import { Pill, PrimaryButton, GhostButton, Card, Toggle, Display } from "./ui";
+import { Enrollment } from "./Enrollment";
 
 type Step = "pairing" | "mfa" | "selection" | "sync" | "snapshots";
 type SyncStatus = "running" | "paused" | "done" | "cancelled";
@@ -31,6 +32,7 @@ function useNow(ms = 1000) {
 }
 
 export function HomeSafe() {
+  const [demo, setDemo] = useState(false);
   const [wifi, setWifi] = useState(true);
   const [drive, setDrive] = useState(true);
   const [step, setStep] = useState<Step>("pairing");
@@ -61,8 +63,11 @@ export function HomeSafe() {
     <PhoneFlow {...{ step, setStep, paired, setPaired, wifi, drive, enabled, setEnabled, differential, setDifferential, dedupe, setDedupe, encrypt, setEncrypt, folders, setFolders, sync, snapshots }} />
   );
 
+  if (!demo) return <Enrollment onDemo={() => setDemo(true)} />;
+
   return (
     <div className="min-h-screen bg-ground text-ink">
+      <div className="flex items-center justify-between gap-3 border-b border-ink/10 px-5 py-2 text-sm text-warn"><span>Demo · pairing, MFA and backups are simulated</span><GhostButton className="h-9 w-auto px-4 text-sm" onClick={() => setDemo(false)}>Exit demo</GhostButton></div>
       <StatusStrip wifi={wifi} drive={drive} setWifi={setWifi} setDrive={setDrive} />
       <div className="mx-auto max-w-[1280px] lg:grid lg:grid-cols-[1fr_420px] lg:gap-8 lg:px-8 lg:py-8">
         <div className="mx-auto max-w-[440px] lg:sticky lg:top-14 lg:order-2 lg:h-[764px] lg:w-full lg:max-w-none lg:overflow-y-auto lg:rounded-[32px] lg:border lg:border-ink/5 lg:shadow-[0_20px_50px_-24px_rgba(47,54,51,0.35)]">{phone}</div>
