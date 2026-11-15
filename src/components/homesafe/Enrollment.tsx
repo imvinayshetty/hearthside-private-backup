@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { HardDrive, Shield, Smartphone, AlertTriangle, Wifi, QrCode, Keyboard, Loader2 } from "lucide-react";
-import { ROOT_FOLDER, defaultBackupName, localVaultAddress, pairingCode, safeSegment, vaultEmail, type BackupKind } from "@/lib/backup-rules";
+import { ROOT_FOLDER, defaultBackupName, localVaultAddress, pairingCode, vaultEmail, type BackupKind } from "@/lib/backup-rules";
 import { cn } from "@/lib/utils";
 import { Display, GhostButton, Pill, PrimaryButton } from "./ui";
 
