@@ -64,7 +64,7 @@ export function NewBackup({ existing, onDone }: { existing: { name: string; date
     <GhostButton disabled={busy || running} onClick={pick} className="mt-4 w-full"><FolderOpen size={17} />{kind === "Full" ? "Load phone files" : "Choose files or folders"}</GhostButton>
     {items.length > 0 && <p className="mt-2 text-xs text-slate">{items.length} items · {mb(items.reduce((s, i) => s + i.bytes, 0))}</p>}
     <label className="mt-5 block text-sm font-medium">Backup name<input aria-label="Backup name" className={connectionInput} value={name} disabled={running} onChange={e => setName(e.target.value)} aria-invalid={!!nameError} /></label>
-    {nameError && <p role="alert" className="mt-2 text-xs leading-5 text-warn">{nameError} {nameError.includes("suffix") && `For example ${defaultBackupName(kind, today)}_2.`}</p>}
+    {nameError && <p role="alert" className="mt-2 text-xs leading-5 text-warn">{nameError} {name.trim().toLowerCase() === defaultBackupName(kind, today).toLowerCase() && `A backup already exists for today — add a suffix such as ${defaultBackupName(kind, today)}_2.`}</p>}
     <PrimaryButton className="mt-5" disabled={busy || running || !!nameError || !items.length} onClick={start}>{busy ? <Loader2 size={18} className="animate-spin motion-reduce:animate-none" /> : <Play size={18} />}Start backup</PrimaryButton>
     {transfer && <div role="status" className="mt-5 text-sm">
       {transfer.state === "running" && <><div className="h-2 overflow-hidden rounded-full bg-ink/10"><div className="h-full bg-sage transition-all" style={{ width: `${pct}%` }} /></div><p className="mt-2 text-slate">{pct}% · {mb(transfer.sentBytes)} of {mb(transfer.totalBytes)}</p></>}
