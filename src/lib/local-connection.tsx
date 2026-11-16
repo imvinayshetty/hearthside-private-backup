@@ -5,6 +5,9 @@ const identity = z.object({ email: z.string().email(), profile: z.string(), phon
 export const offerSchema = identity.extend({ requestId: z.string(), expiresAt: z.number() });
 export const sessionSchema = identity.extend({ connected: z.literal(true) });
 export const catalogSchema = z.object({ backups: z.array(z.object({ name: z.string(), kind: z.enum(["Full", "Custom"]), date: z.string(), files: z.number().nonnegative(), bytes: z.number().nonnegative(), complete: z.boolean() })) });
+export const pickSchema = z.object({ items: z.array(z.object({ name: z.string(), path: z.string(), bytes: z.number().nonnegative() })) });
+export const startSchema = z.object({ transferId: z.string().min(1) });
+export const transferSchema = z.object({ state: z.enum(["running", "complete", "failed"]), sentBytes: z.number().nonnegative(), totalBytes: z.number().nonnegative(), reason: z.string().optional() });
 export type LocalSession = z.infer<typeof sessionSchema>;
 export type PairOffer = z.infer<typeof offerSchema>;
 
@@ -17,6 +20,9 @@ export interface NativeVault {
   begin(input: { email: string; code: string; address: string; fingerprint: string }): Promise<unknown>;
   confirm(requestId: string): Promise<unknown>;
   catalog(): Promise<unknown>;
+  pick(input: { kind: "Full" | "Custom" }): Promise<unknown>;
+  startBackup(input: { name: string; kind: "Full" | "Custom"; paths: string[] }): Promise<unknown>;
+  transferStatus(transferId: string): Promise<unknown>;
   disconnect(): Promise<void>;
 }
 declare global { interface Window { HomeSafeNative?: NativeVault } }
