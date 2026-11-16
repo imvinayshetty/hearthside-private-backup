@@ -66,7 +66,7 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
                 let session = try await Vault(address: p.address, pin: p.pin).post("/v1/pair/confirm", ["requestId": requestId, "signature": signature])
                 try Keys.savePairing(["address": p.address, "pin": p.pin, "deviceId": p.deviceId])
                 self.pending = nil
-                call.resolve(session as? [String: Any] ?? [:])
+                call.resolve(session)
             } catch { call.reject(error.localizedDescription) }
         }
     }
@@ -193,9 +193,9 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
                 let transfer = Transfer(); transfer.total = total
                 self.lock.lock(); self.transfers[id] = transfer; self.lock.unlock()
                 call.resolve(["transferId": id])
-                await UIApplication.shared.isIdleTimerDisabled = true
+                await MainActor.run { UIApplication.shared.isIdleTimerDisabled = true }
                 await self.run(vault, id, token, items, transfer)
-                await UIApplication.shared.isIdleTimerDisabled = false
+                await MainActor.run { UIApplication.shared.isIdleTimerDisabled = false }
             } catch { call.reject(error.localizedDescription) }
         }
     }
