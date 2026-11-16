@@ -35,4 +35,6 @@ use the editor.
 - Connect backup data only through a native local transport after identity and certificate verification; the hosted app must never proxy backup bytes or claim an unavailable Vault protocol exists.
 - Keep the independently installable Python LAN service in `public/local-vault` with protocol documentation and security tests; never run it inside hosted SSR because it requires a trusted local computer and drive.
 - Keep Login, pairing and Backups as separate content routes sharing memory-only connection context; native secure storage owns device credentials, not browser storage.
+- Native file access, device keys, pinned TLS and Vault upload live in the local Capacitor plugin `native/homesafe-vault` (Swift + Java), exposed to screens only via `src/lib/native-bridge.ts`; the web code must keep working with no native APIs.
+- Mobile builds use `scripts/build-mobile.mjs` (CAPACITOR_BUILD SPA shell into `mobile-web/`) so phones bundle the screens instead of loading the hosted site.
 <!-- AGENT-MEMORY:END -->

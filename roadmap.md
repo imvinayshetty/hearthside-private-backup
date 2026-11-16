@@ -9,3 +9,5 @@
 - [x] Approved pairing plan: Wi-Fi/QR/typed-address options, Vault email, pairing code, profile/phone destination path, truthful "Vault unavailable" state.
 - [ ] Verify profile/phone confirmation, returning-device access and saved-backup filters on a real phone — screens and signed service endpoints exist; installed native transport is missing.
 - [ ] Native discovery, QR reading, device identity, certificate pinning — require installed Android/iPhone apps.
+- [x] Native Android/iOS file access, file/folder picking and pinned-TLS transfer to the Vault; Vault upload endpoints with tests and a real TLS round trip.
+- [ ] Compile and run on a real Android phone and iPhone — requires the user's Mac (see MOBILE.md).
