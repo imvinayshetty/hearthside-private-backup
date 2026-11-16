@@ -11,7 +11,9 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:mobile": "node scripts/build-mobile.mjs",
+    "cap:sync": "node scripts/build-mobile.mjs && npx cap sync"
   },
   "overrides": {
     "rolldown": "1.2.1"
@@ -59,7 +61,7 @@
     "cmdk": "^1.1.1",
     "date-fns": "^4.1.0",
     "embla-carousel-react": "^8.6.0",
-    "homesafe-vault-native": "./native/homesafe-vault",
+    "homesafe-vault-native": "file:./native/homesafe-vault",
     "input-otp": "^1.4.2",
     "lucide-react": "^0.575.0",
     "react": "^19.2.0",
