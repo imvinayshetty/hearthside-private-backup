@@ -91,4 +91,50 @@ class PairingTests(unittest.TestCase):
         self.assertTrue(private_ip('192.168.1.2')); self.assertTrue(private_ip('10.0.0.1'))
         self.assertFalse(private_ip('127.0.0.1')); self.assertFalse(private_ip('8.8.8.8'))
 
+
+import hashlib, datetime as _dt
+class UploadTests(PairingTests):
+    def paired(self):
+        offer,value = self.begin(); self.confirm(offer); return value['deviceId']
+    def proof(self, device, extra):
+        nonce = self.store.challenge({'deviceId': device})['challenge']
+        return dict(deviceId=device, challenge=nonce, signature=self.sign({'deviceId':device,'challenge':nonce,'action':'backup',**extra}))
+    def start(self, name=None, files=(('DCIM/a.jpg', 5), ('b.txt', 0))):
+        device = self.paired() if not hasattr(self, 'device') else self.device
+        self.device = device
+        today = _dt.datetime.fromtimestamp(self.now).strftime('%d%m%y')
+        name = name or f'Full_Bckup_{today}'
+        listing = [{'path':p,'bytes':b} for p,b in files]
+        return self.store.start_backup({**self.proof(device, {'name':name,'kind':'Full','files':len(listing),'bytes':sum(b for _,b in files)}), 'name':name, 'kind':'Full', 'files':listing}), name
+    def send(self, t, index, offset, body):
+        return self.store.chunk(t['transferId'], t['token'], index, offset, hashlib.sha256(body).hexdigest(), body)
+    def test_full_upload_written_and_read_back(self):
+        t, name = self.start()
+        self.send(t, 0, 0, b'he'); self.send(t, 0, 2, b'llo'); self.send(t, 1, 0, b'')
+        self.assertEqual(self.store.finish(t)['state'], 'complete')
+        folder = self.drive/'HomeSafeBckup/Vinay/Blue Pixel'/name
+        self.assertEqual((folder/'DCIM/a.jpg').read_bytes(), b'hello')
+        nonce = self.store.challenge({'deviceId': self.device})['challenge']
+        cat = self.store.catalog({'deviceId':self.device,'challenge':nonce,'signature':self.sign({'deviceId':self.device,'challenge':nonce,'action':'catalog'})})
+        self.assertEqual(cat['backups'][0]['files'], 2); self.assertTrue(cat['backups'][0]['complete'])
+    def test_finish_requires_every_file(self):
+        t,_ = self.start(); self.send(t, 0, 0, b'hello')
+        with self.assertRaisesRegex(ValueError, 'not received'): self.store.finish(t)
+    def test_rejects_bad_checksum_offset_and_token(self):
+        t,_ = self.start()
+        with self.assertRaisesRegex(ValueError, 'checksum'): self.store.chunk(t['transferId'], t['token'], 0, 0, '0'*64, b'x')
+        with self.assertRaisesRegex(ValueError, 'offset'): self.send(t, 0, 3, b'x')
+        with self.assertRaisesRegex(ValueError, 'unavailable'): self.store.chunk(t['transferId'], 'wrong', 0, 0, hashlib.sha256(b'x').hexdigest(), b'x')
+    def test_never_overwrites_and_requires_same_day_suffix(self):
+        _, name = self.start()
+        with self.assertRaisesRegex(ValueError, 'already exists'): self.start(name)
+        t,_ = self.start(name + '_2'); self.assertIn('token', t)
+    def test_rejects_wrong_date_and_traversal(self):
+        with self.assertRaisesRegex(ValueError, 'must start'): self.start('Full_Bckup_010101')
+        with self.assertRaises(ValueError): self.start(files=(('../x', 1),))
+    def test_revoked_device_cannot_upload(self):
+        t,_ = self.start(); self.store.revoke(self.device)
+        with self.assertRaises(ValueError): self.send(t, 0, 0, b'hello')
+
+
 if __name__ == '__main__': unittest.main()

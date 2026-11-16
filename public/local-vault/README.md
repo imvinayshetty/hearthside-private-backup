@@ -34,10 +34,16 @@ Sign UTF-8 JSON with sorted keys, no whitespace, no ASCII escaping. All native t
 - `POST /v1/device/challenge`: deviceId. Returns a one-use challenge valid for 30 seconds. Only active enrolled identities qualify.
 - `POST /v1/backups`: deviceId, challenge, signature over `{deviceId,challenge,action:"catalog"}`. Lists only `HomeSafeBckup/profile/phone` for that identity. Revocation is checked every time. Recognizes dated Full/Custom folders with `manifest.json` containing nonnegative integer files/bytes and boolean complete. This reader does not alter existing Vault data.
 
+- `POST /v1/backup/start` (up to 16 MiB JSON): deviceId, challenge, name, kind, files `[{path, bytes}]`, signature over `{deviceId,challenge,action:"backup",name,kind,files:<count>,bytes:<total>}`. The name must be today's `Full_Bckup_DDMMYY` / `Custom_Bckup_DDMMYY` (or with a `_suffix`); existing folders are never overwritten and a same-day default name is refused. Writes `manifest.json` with `complete:false`. Returns transferId and a one-transfer token.
+- `POST /v1/backup/chunk`: raw bytes (max 4 MiB) with headers `X-Transfer-Id`, `X-Transfer-Token`, `X-File-Index`, `X-Offset`, `X-Sha256`. Offsets must be sequential; each chunk's SHA-256 is checked; a file is renamed into place only when complete. Zero-byte files send one empty chunk.
+- `POST /v1/backup/finish`: transferId, token. Requires every file and marks the manifest complete. Revocation is re-checked on every chunk.
+
+The TLS certificate is ECDSA P-256 (phones do not accept Ed25519 TLS certificates). If you ran an earlier version, delete `vault.pem` and `vault-key.pem` in the state folder and re-pair.
+
 Failed pairing is limited to five attempts per peer before a 60-second lockout and five per ticket; no public account lookup. Codes are stored as salted hashes, claimed once; replay/expired confirmations and mismatched signatures are rejected. Requests are limited to 8 KiB. State transactions are serialized. Use trusted home networks; this lightweight service is not hardened against high-volume LAN denial-of-service.
 
 ## Mobile boundary and remaining work
 
 The web app's `window.HomeSafeNative` adapter contract expects network, discover, scanQR, begin, confirm, catalog, disconnect. Native `begin` must manage the signed wire exchange; native `confirm` must sign the returned challenge and persist secure enrollment. No implementation is installed in this browser preview. The adapter is a boundary, not a security attestation; security depends on the audited native implementation and trusted app origin.
 
-Android/iOS packaging, native secure keys, certificate pinning, real Wi-Fi discovery, QR decoding, and existing Vault login integration remain required. This service implements pairing and catalog reads, NOT file upload/restore or phone-file permissions. Do not claim a real phone backup until an actual file is written and read back. No test here proves physical device enrollment.
+Android/iOS packaging, native secure keys, certificate pinning, real Wi-Fi discovery, QR decoding, and existing Vault login integration remain required. This service implements pairing, catalog reads and file upload. Restore is not implemented. The native Android/iPhone code lives in `native/homesafe-vault`; see `MOBILE.md`. Do not claim a real phone backup until an actual file is written and read back. No test here proves physical device enrollment.

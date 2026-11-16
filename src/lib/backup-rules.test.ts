@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ROOT_FOLDER, dateCode, defaultBackupName, localVaultAddress, requireAvailableBackup, safeSegment, validateBackupName } from "./backup-rules";
+import { isoToDateCode, ROOT_FOLDER, dateCode, defaultBackupName, localVaultAddress, requireAvailableBackup, safeSegment, validateBackupName } from "./backup-rules";
 
 const day = new Date(2026, 10, 15, 12);
 describe("HomeSafe Vault compatibility", () => {
   it("uses HomeSafeBckup as root", () => expect(ROOT_FOLDER).toBe("HomeSafeBckup"));
+  it("reads Vault catalog dates as DDMMYY", () => expect(isoToDateCode("2026-11-16")).toBe("161126"));
   it("uses DDMMYY", () => expect(dateCode(new Date(2026, 0, 2))).toBe("020126"));
   it("names full backups", () => expect(defaultBackupName("Full", day)).toBe("Full_Bckup_151126"));
   it("names custom backups", () => expect(defaultBackupName("Custom", day)).toBe("Custom_Bckup_151126"));
