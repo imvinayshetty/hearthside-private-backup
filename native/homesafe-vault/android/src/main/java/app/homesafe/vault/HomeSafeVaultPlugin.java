@@ -83,6 +83,7 @@ public class HomeSafeVaultPlugin extends Plugin {
     private final Map<String, Transfer> transfers = new HashMap<>();
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private Pending pending;
+    private volatile boolean pickingFolder;
 
     // ---------- Pairing ----------
 
@@ -181,6 +182,7 @@ public class HomeSafeVaultPlugin extends Plugin {
             .setTitle("Back up")
             .setItems(new String[] { "Files", "A folder" }, (d, which) -> {
                 Intent intent;
+                pickingFolder = which == 1;
                 if (which == 0) {
                     intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
                 } else {
@@ -232,7 +234,7 @@ public class HomeSafeVaultPlugin extends Plugin {
                 Set<String> seen = new HashSet<>();
                 if (data.getClipData() != null) {
                     for (int i = 0; i < data.getClipData().getItemCount(); i++) addDocument(items, seen, data.getClipData().getItemAt(i).getUri());
-                } else if (data.getData() != null && "content".equals(data.getData().getScheme()) && data.getAction() == null && isTree(data.getData())) {
+                } else if (pickingFolder && data.getData() != null) {
                     DocumentFile root = DocumentFile.fromTreeUri(getContext(), data.getData());
                     if (root != null) walk(items, seen, root, safe(root.getName()));
                 } else if (data.getData() != null) {
@@ -242,8 +244,6 @@ public class HomeSafeVaultPlugin extends Plugin {
             } catch (Exception e) { call.reject(message(e)); }
         });
     }
-
-    private static boolean isTree(Uri uri) { List<String> s = uri.getPathSegments(); return s.size() >= 2 && "tree".equals(s.get(0)) && s.size() == 2; }
 
     private void walk(JSArray items, Set<String> seen, DocumentFile dir, String prefix) {
         for (DocumentFile f : dir.listFiles()) {
