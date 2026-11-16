@@ -14,6 +14,7 @@ import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 import { Toaster } from "@/components/ui/sonner";
 import { LocalConnectionProvider } from "@/lib/local-connection";
+import { installNativeVault } from "@/lib/native-bridge";
 
 function NotFoundComponent() {
   return (
