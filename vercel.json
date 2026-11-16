@@ -1,4 +1,9 @@
 {
   "$schema": "https://vercel.sh",
-  "framework": "tanstack-start-lovable"
+  "framework": "tanstack-start-lovable",
+  "git": {
+    "deploymentEnabled": {
+      "prod-ready": true
+    }
+  }
 }
