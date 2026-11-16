@@ -15,6 +15,6 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
     // Only `bun run build:mobile` sets CAPACITOR_BUILD: it emits a static shell for the native apps.
-    ...(process.env.CAPACITOR_BUILD ? { spa: { enabled: true } } : {}),
+    ...(process.env["CAPACITOR_BUILD"] ? { spa: { enabled: true } } : {}),
   },
 });

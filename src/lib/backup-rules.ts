@@ -15,7 +15,7 @@ export function dateCode(date: Date): string {
 // Vault catalog dates are ISO (YYYY-MM-DD); rules compare DDMMYY.
 export function isoToDateCode(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
-  return m ? `${m[3]}${m[2]}${m[1].slice(2)}` : iso;
+  return m ? `${m[3]}${m[2]}${(m[1] ?? "").slice(2)}` : iso;
 }
 export function defaultBackupName(kind: BackupKind, date: Date): string { return `${kind}_Bckup_${dateCode(date)}`; }
 export function validateBackupName(name: string, kind: BackupKind, date: Date): string {
