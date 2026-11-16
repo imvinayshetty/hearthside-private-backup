@@ -16,6 +16,9 @@ import { Toaster } from "@/components/ui/sonner";
 import { LocalConnectionProvider } from "@/lib/local-connection";
 import { installNativeVault } from "@/lib/native-bridge";
 
+// Runs before any screen mounts; a no-op in browsers.
+installNativeVault();
+
 function NotFoundComponent() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">

@@ -1,4 +1,5 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
+import { Network } from "@capacitor/network";
 import { z } from "zod";
 import type { NativeVault } from "./local-connection";
 
@@ -16,10 +17,9 @@ type Plugin = {
 };
 
 /** Installs window.HomeSafeNative only inside the installed Android/iPhone app. */
-export async function installNativeVault(): Promise<void> {
+export function installNativeVault(): void {
   if (typeof window === "undefined" || window.HomeSafeNative || !Capacitor.isNativePlatform()) return;
   const vault = registerPlugin<Plugin>("HomeSafeVault");
-  const { Network } = await import("@capacitor/network");
   const bridge: NativeVault = {
     async network() { const s = await Network.getStatus(); return { wifi: s.connected && s.connectionType === "wifi" }; },
     async discover() { return []; }, // The Vault service does not advertise on Wi-Fi yet; use code or QR.
