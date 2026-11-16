@@ -16,7 +16,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.x509.oid import NameOID
 
 
@@ -63,6 +63,7 @@ class Store:
         CREATE TABLE IF NOT EXISTS pending(id TEXT PRIMARY KEY, ticket TEXT UNIQUE, device TEXT, key TEXT, challenge TEXT, expires REAL);
         CREATE TABLE IF NOT EXISTS challenges(id TEXT PRIMARY KEY, device TEXT, expires REAL);
         CREATE TABLE IF NOT EXISTS limits(peer TEXT PRIMARY KEY, failures INTEGER, until REAL);
+        CREATE TABLE IF NOT EXISTS transfers(id TEXT PRIMARY KEY, device TEXT, folder TEXT, digest TEXT, files TEXT, done TEXT, state TEXT);
         ''')
         self.db.commit()
 
@@ -188,6 +189,114 @@ class Store:
                 backups.append({'name': path.name, 'kind': match[1], 'date': date, 'files': entry['files'], 'bytes': entry['bytes'], 'complete': entry['complete']})
             return {'backups': backups}
 
+    def _device(self, device):
+        row = self.db.execute('SELECT d.email,d.phone,d.key,a.profile FROM devices d JOIN accounts a ON a.email=d.email WHERE d.id=? AND d.revoked=0', (device,)).fetchone()
+        if not row:
+            raise ValueError('Device unavailable or revoked')
+        return row
+
+    def _proof(self, data, action, extra):
+        row = self._device(data['deviceId'])
+        nonce = self.db.execute('SELECT expires FROM challenges WHERE id=? AND device=?', (data['challenge'], data['deviceId'])).fetchone()
+        if not nonce or nonce[0] <= self.clock():
+            raise ValueError('Device proof missing or expired')
+        verify(row[2], data['signature'], {'deviceId': data['deviceId'], 'challenge': data['challenge'], 'action': action, **extra})
+        self.db.execute('DELETE FROM challenges WHERE id=?', (data['challenge'],))
+        return row
+
+    def _phone_folder(self, row):
+        if not self.drive.is_dir():
+            raise ValueError('Backup drive disconnected')
+        folder = self.drive / 'HomeSafeBckup' / row[3] / row[1]
+        if not folder.is_dir() or any(p.is_symlink() for p in (folder, folder.parent, folder.parent.parent)) or not folder.resolve().is_relative_to(self.drive):
+            raise ValueError('Drive disconnected or unsafe phone folder')
+        return folder
+
+    def start_backup(self, data):
+        name, kind, files = segment(data['name']), data['kind'], data['files']
+        if kind not in ('Full', 'Custom') or not isinstance(files, list) or not 0 < len(files) <= 100000:
+            raise ValueError('Invalid backup request')
+        today = dt.datetime.fromtimestamp(self.clock()).strftime('%d%m%y')
+        base = f'{kind}_Bckup_{today}'
+        if name != base and not name.startswith(base + '_'):
+            raise ValueError(f'Backup name must start with {base}')
+        clean, seen, total = [], set(), 0
+        for item in files:
+            path, size = item.get('path') if isinstance(item, dict) else None, item.get('bytes') if isinstance(item, dict) else None
+            if not isinstance(path, str) or not isinstance(size, int) or isinstance(size, bool) or size < 0 or len(path) > 1024:
+                raise ValueError('Invalid file entry')
+            parts = [segment(p) for p in path.split('/')]
+            if len(parts) > 32 or parts[-1].endswith('.homesafe-part') or parts[-1] == 'manifest.json' and len(parts) == 1:
+                raise ValueError('Invalid file path')
+            key = '/'.join(parts).casefold()
+            if key in seen:
+                raise ValueError('Duplicate file path')
+            seen.add(key); clean.append(['/'.join(parts), size]); total += size
+        with self.lock:
+            row = self._proof(data, 'backup', {'name': name, 'kind': kind, 'files': len(clean), 'bytes': total})
+            folder = self._phone_folder(row)
+            existing = [p.name for p in folder.iterdir()]
+            if any(n.casefold() == name.casefold() for n in existing):
+                raise ValueError('That backup already exists. Existing files will not be overwritten.')
+            if name == base and any(re.fullmatch(rf'(Full|Custom)_Bckup_{today}(_.+)?', n) for n in existing):
+                raise ValueError('A backup already exists for today. Add a unique suffix.')
+            target = folder / name
+            target.mkdir(mode=0o700)
+            (target / 'manifest.json').write_text(json.dumps({'kind': kind, 'files': len(clean), 'bytes': total, 'complete': False}))
+            ident, token = secrets.token_urlsafe(24), secrets.token_urlsafe(32)
+            self.db.execute('INSERT INTO transfers VALUES (?,?,?,?,?,?,?)', (ident, data['deviceId'], str(target), hashlib.sha256(token.encode()).hexdigest(), json.dumps(clean), '[]', 'running'))
+            self.db.commit()
+            return {'transferId': ident, 'token': token}
+
+    def _transfer(self, ident, token):
+        row = self.db.execute('SELECT device,folder,digest,files,done,state FROM transfers WHERE id=?', (ident,)).fetchone()
+        if not row or not isinstance(token, str) or not secrets.compare_digest(row[2], hashlib.sha256(token.encode()).hexdigest()) or row[5] != 'running':
+            raise ValueError('Transfer unavailable')
+        self._device(row[0])
+        folder = Path(row[1])
+        if not folder.is_dir() or folder.is_symlink() or not folder.resolve().is_relative_to(self.drive):
+            raise ValueError('Backup drive disconnected')
+        return folder, json.loads(row[3]), json.loads(row[4])
+
+    def chunk(self, ident, token, index, offset, digest, body):
+        with self.lock:
+            folder, files, done = self._transfer(ident, token)
+            if not isinstance(index, int) or not 0 <= index < len(files) or index in done:
+                raise ValueError('Invalid file index')
+            if hashlib.sha256(body).hexdigest() != digest:
+                raise ValueError('Chunk checksum mismatch')
+            path, size = files[index]
+            final = folder.joinpath(*path.split('/'))
+            part = final.with_name(final.name + '.homesafe-part')
+            final.parent.mkdir(parents=True, exist_ok=True)
+            if not final.parent.resolve().is_relative_to(folder.resolve()) or final.exists() or part.is_symlink():
+                raise ValueError('Unsafe destination; nothing overwritten')
+            current = part.stat().st_size if part.exists() else 0
+            if offset != current or current + len(body) > size:
+                raise ValueError('Unexpected chunk offset')
+            with open(part, 'ab') as handle:
+                handle.write(body)
+            if current + len(body) == size:
+                os.link(part, final); part.unlink()
+                done.append(index)
+                self.db.execute('UPDATE transfers SET done=? WHERE id=?', (json.dumps(done), ident))
+                self.db.commit()
+            return {'received': current + len(body)}
+
+    def finish(self, data):
+        with self.lock:
+            folder, files, done = self._transfer(data['transferId'], data['token'])
+            if len(done) != len(files):
+                raise ValueError('Some files were not received')
+            total = sum(f[1] for f in files)
+            manifest = json.loads((folder / 'manifest.json').read_text())
+            manifest['complete'] = True
+            tmp = folder / 'manifest.json.homesafe-part'
+            tmp.write_text(json.dumps(manifest)); os.replace(tmp, folder / 'manifest.json')
+            self.db.execute("UPDATE transfers SET state='complete' WHERE id=?", (data['transferId'],))
+            self.db.commit()
+            return {'state': 'complete', 'sentBytes': total, 'totalBytes': total}
+
     def revoke(self, device):
         with self.lock:
             self.db.execute('UPDATE devices SET revoked=1 WHERE id=?', (device,))
@@ -198,10 +307,11 @@ def certificate(directory, host):
     directory = Path(directory)
     cert, keyfile = directory / 'vault.pem', directory / 'vault-key.pem'
     if not cert.exists() and not keyfile.exists():
-        key = ed25519.Ed25519PrivateKey.generate()
+        # ECDSA P-256: Ed25519 TLS certificates are not accepted by iOS or Android.
+        key = ec.generate_private_key(ec.SECP256R1())
         name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'HomeSafe local Vault')])
         now = dt.datetime.now(dt.timezone.utc)
-        value = x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(now - dt.timedelta(minutes=1)).not_valid_after(now + dt.timedelta(days=365)).add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(host))]), critical=False).sign(key, algorithm=None)
+        value = x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(now - dt.timedelta(minutes=1)).not_valid_after(now + dt.timedelta(days=365)).add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(host))]), critical=False).sign(key, hashes.SHA256())
         keyfile.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
         os.chmod(keyfile, 0o600)
         cert.write_bytes(value.public_bytes(serialization.Encoding.PEM))
@@ -220,19 +330,28 @@ def server(store, host, port):
             pass  # Never log pairing codes, identities or signatures.
         def do_POST(self):
             try:
-                if not private_ip(self.client_address[0]) or self.headers.get('Origin'):
+                if not private_ip(self.client_address[0]) or self.headers.get('Origin') or self.headers.get('Transfer-Encoding'):
                     raise ValueError('Native home-network connections only')
                 size = int(self.headers.get('Content-Length', '0'))
-                if size < 2 or size > 8192 or self.headers.get('Transfer-Encoding'):
-                    raise ValueError('Invalid request size')
-                data = json.loads(self.rfile.read(size))
-                if not isinstance(data, dict):
-                    raise ValueError('Invalid request')
-                actions = {'/v1/pair/begin': lambda: store.begin(data, self.client_address[0]), '/v1/pair/confirm': lambda: store.confirm(data), '/v1/device/challenge': lambda: store.challenge(data), '/v1/backups': lambda: store.catalog(data)}
-                action = actions.get(self.path)
-                if not action:
-                    self.send_error(404); return
-                output, status = action(), 200
+                if self.path == '/v1/backup/chunk':
+                    if size < 0 or size > 4194304:
+                        raise ValueError('Invalid chunk size')
+                    h = self.headers
+                    output, status = store.chunk(h.get('X-Transfer-Id'), h.get('X-Transfer-Token'), int(h.get('X-File-Index', '-1')), int(h.get('X-Offset', '-1')), h.get('X-Sha256', ''), self.rfile.read(size)), 200
+                else:
+                    limit = 16777216 if self.path == '/v1/backup/start' else 8192
+                    if size < 2 or size > limit:
+                        raise ValueError('Invalid request size')
+                    data = json.loads(self.rfile.read(size))
+                    if not isinstance(data, dict):
+                        raise ValueError('Invalid request')
+                    actions = {'/v1/pair/begin': lambda: store.begin(data, self.client_address[0]), '/v1/pair/confirm': lambda: store.confirm(data), '/v1/device/challenge': lambda: store.challenge(data), '/v1/backups': lambda: store.catalog(data), '/v1/backup/start': lambda: store.start_backup(data), '/v1/backup/finish': lambda: store.finish(data)}
+                    action = actions.get(self.path)
+                    if not action:
+                        self.send_error(404); return
+                    output, status = action(), 200
+            except ValueError as error:
+                output, status = {'error': str(error)}, 403
             except Exception:
                 output, status = {'error': 'Request rejected. Check the code, expiry, device identity and drive on your Vault.'}, 403
             payload = canonical(output)
@@ -246,7 +365,7 @@ def server(store, host, port):
         daemon_threads = True
         def get_request(self):
             sock, addr = super().get_request()
-            sock.settimeout(10)
+            sock.settimeout(30)
             return sock, addr
     http = Server((host, port), Handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

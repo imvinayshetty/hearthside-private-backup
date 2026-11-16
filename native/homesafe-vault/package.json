@@ -1,0 +1,10 @@
+{
+  "name": "homesafe-vault-native",
+  "version": "1.0.0",
+  "description": "HomeSafe native file access and local Vault transfer for Android and iOS",
+  "private": true,
+  "main": "index.js",
+  "files": ["android/src/main/", "android/build.gradle", "ios/Sources", "HomesafeVaultNative.podspec", "Package.swift"],
+  "capacitor": { "ios": { "src": "ios" }, "android": { "src": "android" } },
+  "peerDependencies": { "@capacitor/core": "^7" }
+}

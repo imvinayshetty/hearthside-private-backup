@@ -12,6 +12,11 @@ export function safeSegment(value: string): string {
 export function dateCode(date: Date): string {
   return [date.getDate(), date.getMonth() + 1, date.getFullYear() % 100].map(n => String(n).padStart(2, "0")).join("");
 }
+// Vault catalog dates are ISO (YYYY-MM-DD); rules compare DDMMYY.
+export function isoToDateCode(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? `${m[3]}${m[2]}${(m[1] ?? "").slice(2)}` : iso;
+}
 export function defaultBackupName(kind: BackupKind, date: Date): string { return `${kind}_Bckup_${dateCode(date)}`; }
 export function validateBackupName(name: string, kind: BackupKind, date: Date): string {
   const clean = safeSegment(name);
