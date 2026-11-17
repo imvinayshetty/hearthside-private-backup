@@ -51,3 +51,11 @@ git pull && npm install && npm run cap:sync
 - iPhone Full backup covers the Photos library. Photos stored only in iCloud are never downloaded — the backup stops with a message instead.
 - Android Full backup covers photos and videos the system allows; use Custom for other folders.
 - Wi-Fi discovery is not available; pair with the code or QR from the Vault console.
+
+
+### Wi-Fi name and automatic Vault finding
+- **iPhone/iPad:** in Xcode → Signing & Capabilities add **Access Wi-Fi Information**. Add to Info.plist:
+  `NSLocationWhenInUseUsageDescription` = "Show which Wi-Fi you're on so you know you're at home." and `NSBonjourServices` = `_homesafe._tcp`.
+  Note: a free Personal Team may not offer the Wi-Fi capability; the app then shows "Wi-Fi connected" without the name.
+- **Android:** the plugin adds location, Wi-Fi state and multicast permissions. Android asks for location once — it is how Android protects Wi-Fi names.
+- **Vault computer:** `pip install zeroconf` so phones find the Vault by themselves. Without it, pair by scanning the QR code.

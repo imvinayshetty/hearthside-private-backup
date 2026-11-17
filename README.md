@@ -96,3 +96,5 @@ python3 -m unittest public/local-vault/test_service.py
 6. **New backup screen** — Full/Custom, picker, dated name, same-day suffix warning, progress/completion/failure; shown only after pairing is verified.
 7. **Native mobile** — Capacitor config, `native/homesafe-vault` plugin (file access, pickers, Keychain/Keystore keys, pinned TLS upload, QR scan), Vault upload endpoints with chunk hashing and no-overwrite; `MOBILE.md` build guide.
 8. **Documentation** — this README captures all workflows and changes and is kept current.
+
+- **Pairing simplified (Nov 17 2026):** Pair screen asks only for the 6-digit code or a QR scan. Vault address and certificate pin are found automatically (Wi-Fi discovery `_homesafe._tcp` with `fp` TXT record, or the QR payload) and kept in native secure storage. Wi-Fi status now shows the real network name on Android (WifiManager + location permission) and iOS (NEHotspotNetwork + Access Wi-Fi Information entitlement). Vault service advertises itself when `zeroconf` is installed.
