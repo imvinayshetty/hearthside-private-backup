@@ -1,71 +1,100 @@
-# HomeSafe
+# HomeSafe (Mobile)
 
-Create new project and name the project HomeSafe and continue with the task: an app that connects to home WiFi using MFA and performs customized backup of mobile (Android or iOS) into a hard drive connected to the same app on the same WiFi, with zero data leaving the local network.
+Local-first, zero-cloud private backup of Android and iPhone/iPad devices to an external hard drive on your home Wi-Fi. The companion host product is **Homesafe Vault** (a separate project). Nothing ever leaves your local network.
 
-Locked:
-- Product identity: HomeSafe — Local-first, zero-cloud private backup system for home networks.
-- Visual direction: Calm Privacy-first look.
-  - Palette: Muted sage green accents, warm slate neutrals, crisp white/soft off-white backgrounds, reassuring green status indicators.
-  - Typography: Clean sans-serif typography, highly legible numbers and metrics, generous whitespace and card paddings.
-  - Shapes & controls: Rounded corners (12-16px radius), soft borders, high-affordance buttons, subtle shadows.
-  - Design spec rules:
-    - Layout: Apply generous whitespace, open card paddings, rounded corners, and simple, high-affordance controls.
-    - Type-and-color: Use a calm, minimal palette with muted sage green accents, warm slate neutrals, and clean sans-serif typography.
-    - Content: Display clear offline indicators highlighting that all traffic is strictly local and zero-cloud.
-- Designed screens and flow sequence (device: mobile, phone 393×764):
-  1. Screen 1: LAN Discovery & Pairing (pairing-screen)
-     - App opens here on launch.
-     - Header: "HomeSafe", local connection indicator ("Local WiFi Only • Encrypted").
-     - Content: Scans for local backup host daemon on LAN. Shows discovered daemon "HomeSafe Vault (192.168.1.142)", storage capacity ("2.4 TB free on WD Elements 4TB"), and "Pair with Vault" action with pinned certificate fingerprint preview.
-  2. Screen 2: Local MFA Verification (mfa-screen)
-     - Secure authorization step before backup or settings access.
-     - Biometric authentication prompt (Face ID / Fingerprint simulation) and local TOTP/pin verification card ("Enter 6-digit vault authenticator code").
-     - Reassurance badge: "Keys verified on-device. No cloud relay."
-  3. Screen 3: Backup Customization (selection-screen)
-     - Granular backup source selection with storage calculation and toggles:
-       - Photos & Videos (e.g. 42.8 GB, 3,420 items)
-       - Documents & Downloads (e.g. 4.1 GB, 280 files)
-       - App Data & Contacts (e.g. 1.2 GB, 1,140 contacts)
-     - Target drive status: "Mounted: WD My Passport (3.2 TB free)".
-     - Deduplication & encryption toggles (BLAKE3 chunking, FastCDC, local AES-GCM-256 client encryption).
-     - Primary button: "Start Backup".
-  4. Screen 4: Live Sync & Status (sync-status-screen)
-     - Live transfer progress bar with speed ("48.5 MB/s LAN"), transferred bytes ("12.4 GB / 48.1 GB"), remaining time.
-     - Deduplication efficiency indicator ("6.2 GB deduplicated / saved").
-     - Current chunk hash and file being transferred.
-     - Controls: Pause / Resume, Cancel, and View Transfer Logs.
-     - Completed state summary and snapshot history log.
+> This README is the living record of the project. It is updated with every change.
 
-Open:
-- Responsive layout across desktop (1280×832), tablet, and mobile (393×764). On desktop/tablet, show a split-pane vault dashboard with host daemon management, drive health, snapshot explorer, and connected device manager alongside mobile backup controls.
-- Full local interactive simulation:
-  - Discovered daemons, pairing handshake, certificate pinning simulation.
-  - Interactive MFA verification (PIN entry / Biometric trigger).
-  - Configurable backup sets with item count and size calculations.
-  - Live animated backup simulation with realistic speed metrics, deduplication counters, chunk hashing displays, and snapshot history commit.
-  - Snapshot explorer allowing browsing previous local snapshots and initiating local file restore flows.
-  - Zero-cloud indicators and local network status banner always visible.
-- Accessibility, keyboard navigation, crisp empty states, and error handling for disconnected drives or WiFi loss.
+## Privacy boundary
 
-build a real working app, not a clickable prototype; the screen and kit files show layout, content and look (a wireframe's, structure only) and are never code to copy. The screens are the moments the user designed, not the whole product. Before building, walk through each flow as its user would and design what the pictures leave out, as a product designer would for this product: the steps a flow needs to finish and how the app responds to what the user does, including the moments its users will actually run into, like waiting on something or finding nothing yet. Add nothing a user of this product would never meet, and keep an app the user wants simple, simple. Never leave a step the product's core flows need as "coming soon", unless the brief says the user chose to. Where such a step needs an outside service, build every part up to it and say in your reply what's left to connect. Fill product gaps only, never a look the design set: an added step reuses the UI kit's tokens, chrome and parts and the nearest designed screen's layout, with no new visual direction. Look at every screen's picture before writing code; design.md says which picture or sheet holds each screen. Open the UI kit's shells and parts HTML for the header, tab bar, composer and components, not only its tokens. Use each finished screen's copy exactly as design.md lists it; never invent copy for one. A wireframe under design.md's Wireframes gives structure only: build it in the design's look, as design.md says. The screens' photos are placeholders for the mockups only: replace every photo design.md lists with the user's own upload for it, else as design.md says (a photo without people re-composed with imagegen--edit_image from it as a reference, a photo of people generated from its brief and never from the photo), and ship no set photo or its URL. For a design that came with no design.md, every photo on assets.lovable.dev or images.unsplash.com is a set photo: replace it with the user's own upload for it, else a new image generated for its slot, any person in it one who doesn't exist, never from the photo or a picture showing it. Build and check each screen at the canvas it was drawn at: phone 393×764, tablet landscape 1133×744, tablet portrait 744×1133, desktop 1280×832. After building, screenshot the app at those sizes and states, compare each finished screen with its picture, and fix every visual difference you didn't choose; check a wireframe's screen against its structure, never its grey look. End your reply with "Changed from the mockups": each deliberate change and why, and "Added beyond the mockups": each step, state or interaction you built that no screen shows.
+- Phones talk only to a Vault on a private IPv4 address (`10.x`, `172.16–31.x`, `192.168.x`) over HTTPS on port `7443`.
+- The Vault's TLS certificate SHA-256 fingerprint is checked by the user and pinned on the phone.
+- Device keys (Ed25519) live in the iOS Keychain / Android Keystore — never in browser storage.
+- The hosted web app never proxies backup bytes; no cloud relay, no telemetry of files.
 
-This project was built with [Lovable](https://lovable.dev).
+## Tech stack
 
-## Build with Lovable
+- React 19, TanStack Start v1 / TanStack Router (file routes in `src/routes`), Vite, TypeScript
+- Tailwind CSS v4 (OKLCH tokens in `src/styles.css`, sage/slate palette, Fraunces + Inter), Radix UI, lucide icons, sonner
+- Capacitor mobile shell + local native plugin `native/homesafe-vault` (Swift + Java)
+- Python 3.11+ LAN Vault service in `public/local-vault` (`cryptography`)
+- Vitest + Testing Library; Python `unittest` for the Vault service
 
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/fca0802a-c29e-44e2-9c74-0c2c2159d5ba).
+## App workflow
 
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
+1. **Login (`/`)** — enter your Vault account email only. A labeled **Demo** mode runs the full simulated flow (pairing, Face ID, MFA, live backup, snapshots, desktop vault dashboard).
+2. **Pair (`/pair`)** — shows Wi-Fi status and two options: **Enter code** or **Scan QR code**. Enter the Vault address (`https://<private-ip>:7443`) and fingerprint, confirm the fingerprint matches the Vault's screen, enter the 6-digit pairing code (valid 120 s, 5 attempts then lockout), then confirm the profile and phone name the Vault assigned.
+3. **Backups (`/backups`)** — only after the Vault sends `pairing_verified`:
+   - **New backup:** Full backup (all files the phone allows) or Custom folders; file/folder picker; name prefilled `Full_Bckup_DDMMYY` / `Custom_Bckup_DDMMYY`; warning when today's backup exists, requiring a suffix like `_2`; **Start backup** reports progress, completion or failure with a reason.
+   - **Saved backups:** catalog filtered by type and date.
 
-## Development
+Backups are stored at `HomeSafeBckup/<profile>/<phone>/<Full|Custom>_Bckup_DDMMYY[_suffix]`. Existing backups are never overwritten; phone names are unique per profile. Rules live in `src/lib/backup-rules.ts`.
 
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
+## Key code
+
+| Path | Purpose |
+| --- | --- |
+| `src/routes/index.tsx`, `pair.tsx`, `backups.tsx` | Login, pairing, backups screens |
+| `src/components/homesafe/` | Shell, New backup, Enrollment, demo simulation (`HomeSafe.tsx`), UI parts |
+| `src/lib/local-connection.tsx` | Memory-only session context and `window.HomeSafeNative` contract |
+| `src/lib/native-bridge.ts` | Bridge to the Capacitor plugin; web works without native APIs |
+| `src/lib/backup-rules.ts` | Vault-compatible names, paths, address and code validation |
+| `src/lib/vault.ts` | Demo simulation data and helpers |
+| `native/homesafe-vault` | iOS/Android file access, pickers, device keys, pinned TLS, upload |
+| `public/local-vault` | Python LAN Vault service, tests and protocol docs |
+| `scripts/build-mobile.mjs` | Builds the SPA shell into `mobile-web/` for Capacitor |
+
+## Local Vault service
+
+Runs on the computer with the drive (never on hosting):
 
 ```sh
-git clone <this-repository-url>
-cd <repository-name>
+cd public/local-vault
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python service.py --drive /media/your-drive --host 192.168.1.108
+```
+
+Console: `register EMAIL PROFILE`, `pair EMAIL PHONE` (shows code, fingerprint, QR payload), `revoke DEVICE_ID`. Protocol v1 (TLS 1.3, ECDSA P-256 cert): `/v1/pair/begin`, `/v1/pair/confirm`, `/v1/device/challenge`, `/v1/backups`, `/v1/backup/start`, `/v1/backup/chunk` (≤4 MiB, SHA-256 checked), `/v1/backup/finish`. Full details: `public/local-vault/README.md`. If you ran an older version, delete `vault.pem` and `vault-key.pem` and re-pair.
+
+## Building the phone apps (free, on a Mac)
+
+```sh
+npm install
+npm run build:mobile
+npx cap add ios && npx cap add android
+npx cap sync
+npx cap open ios      # or: npx cap open android
+```
+
+Info.plist entries and signing steps: see `MOBILE.md`. After each update: `git pull && npm install && npm run cap:sync`.
+
+## Development and tests
+
+```sh
 npm i
 npm run dev
+bunx vitest run
+python3 -m unittest public/local-vault/test_service.py
 ```
+
+## Known limits
+
+- Keep the app open during a backup; no background transfer yet.
+- iPhone Full backup covers the Photos library; iCloud-only photos stop the backup with a message.
+- Android Full backup covers photos and videos; use Custom for other folders.
+- No Wi-Fi (mDNS) discovery yet — pair with the code or QR.
+- Restore to phone is not implemented in the Vault service.
+- Integration with the existing Homesafe Vault account login is pending (Vault project).
+- Not yet compiled and run on a real Android phone or iPhone.
+
+## Changelog
+
+1. **Initial app** — designed screens (pairing, MFA, selection, live sync) as a full local simulation with snapshot explorer, restore, desktop vault dashboard, Wi-Fi loss / drive unplugged states; generated living-room photo.
+2. **Identity** — mobile app named HomeSafe ("HomeSafe (Mobile)"); host product is Homesafe Vault.
+3. **Enrollment** — Vault-compatible naming/path rules with tests; truthful setup screen; simulation moved behind a Demo label.
+4. **Approved pairing plan** — Wi-Fi/QR/typed address, Vault email, pairing code, profile/phone destination path.
+5. **Separate screens** — Login → Pair → Backups routes; memory-only connection context; installable Python LAN pairing service with security tests and real TLS round trip.
+6. **New backup screen** — Full/Custom, picker, dated name, same-day suffix warning, progress/completion/failure; shown only after pairing is verified.
+7. **Native mobile** — Capacitor config, `native/homesafe-vault` plugin (file access, pickers, Keychain/Keystore keys, pinned TLS upload, QR scan), Vault upload endpoints with chunk hashing and no-overwrite; `MOBILE.md` build guide.
+8. **Documentation** — this README captures all workflows and changes and is kept current.
+
+- **Pairing simplified (Nov 17 2026):** Pair screen asks only for the 6-digit code or a QR scan. Vault address and certificate pin are found automatically (Wi-Fi discovery `_homesafe._tcp` with `fp` TXT record, or the QR payload) and kept in native secure storage. Wi-Fi status now shows the real network name on Android (WifiManager + location permission) and iOS (NEHotspotNetwork + Access Wi-Fi Information entitlement). Vault service advertises itself when `zeroconf` is installed.

@@ -6,7 +6,11 @@ import type { NativeVault } from "./local-connection";
 // QR payload printed by the Vault console (`pair EMAIL PHONE`).
 export const vaultQrSchema = z.object({ version: z.literal(1), address: z.string(), fingerprint: z.string(), code: z.string().regex(/^\d{6}$/) });
 
+export const discoveredSchema = z.object({ name: z.string().optional(), address: z.string(), fingerprint: z.string().regex(/^[a-fA-F0-9:]{64,95}$/) });
+
 type Plugin = {
+  wifi(): Promise<{ wifi: boolean; name?: string }>;
+  discover(): Promise<{ vaults: unknown[] }>;
   begin(i: { email: string; code: string; address: string; fingerprint: string }): Promise<unknown>;
   confirm(i: { requestId: string }): Promise<unknown>;
   catalog(): Promise<unknown>;
@@ -21,8 +25,15 @@ export function installNativeVault(): void {
   if (typeof window === "undefined" || window.HomeSafeNative || !Capacitor.isNativePlatform()) return;
   const vault = registerPlugin<Plugin>("HomeSafeVault");
   const bridge: NativeVault = {
-    async network() { const s = await Network.getStatus(); return { wifi: s.connected && s.connectionType === "wifi" }; },
-    async discover() { return []; }, // The Vault service does not advertise on Wi-Fi yet; use code or QR.
+    async network() {
+      const s = await Network.getStatus();
+      if (!s.connected || s.connectionType !== "wifi") return { wifi: false };
+      try { const w = await vault.wifi(); return w.name ? { wifi: true, name: w.name } : { wifi: true }; } catch { return { wifi: true }; }
+    },
+    async discover() {
+      const { vaults } = await vault.discover();
+      return vaults.flatMap((v) => { const r = discoveredSchema.safeParse(v); return r.success ? [r.data] : []; });
+    },
     async scanQR() {
       const { BarcodeScanner, BarcodeFormat } = await import("@capacitor-mlkit/barcode-scanning");
       const { camera } = await BarcodeScanner.requestPermissions();

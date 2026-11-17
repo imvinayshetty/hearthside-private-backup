@@ -1,6 +1,8 @@
 import Foundation
 import Capacitor
+import CoreLocation
 import CryptoKit
+import NetworkExtension
 import Photos
 import Security
 import UIKit
@@ -13,6 +15,8 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
     public let identifier = "HomeSafeVaultPlugin"
     public let jsName = "HomeSafeVault"
     public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "wifi", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "discover", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "begin", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "confirm", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "catalog", returnType: CAPPluginReturnPromise),
@@ -34,6 +38,31 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
     private var transfers: [String: Transfer] = [:]
     private let lock = NSLock()
     private static let chunkSize = 4 * 1024 * 1024
+
+    // MARK: Wi-Fi
+
+    private let location = CLLocationManager()
+    private var browser: Discovery?
+
+    /// Wi-Fi name via NEHotspotNetwork (needs the Access Wi-Fi Information entitlement + location "when in use").
+    @objc func wifi(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            if self.location.authorizationStatus == .notDetermined { self.location.requestWhenInUseAuthorization() }
+            NEHotspotNetwork.fetchCurrent { network in
+                var out: [String: Any] = ["wifi": network != nil]
+                if let ssid = network?.ssid, !ssid.isEmpty { out["name"] = ssid }
+                call.resolve(out)
+            }
+        }
+    }
+
+    /// Finds Vaults announcing _homesafe._tcp on this Wi-Fi for up to 4 seconds.
+    @objc func discover(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            let d = Discovery(); self.browser = d
+            d.start { vaults in call.resolve(["vaults": vaults]); self.browser = nil }
+        }
+    }
 
     // MARK: Pairing
 
@@ -352,4 +381,29 @@ enum Keys {
     }
     static func savePairing(_ value: [String: String]) throws { try write("pairing", JSONSerialization.data(withJSONObject: value)) }
     static func loadPairing() -> [String: String]? { read("pairing").flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] } }
+}
+
+/// Bonjour browser for the Vault's announcement; reads address, port and certificate pin from TXT.
+final class Discovery: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
+    private let browser = NetServiceBrowser()
+    private var services: [NetService] = []
+    private var found: [[String: String]] = []
+    func start(_ done: @escaping ([[String: String]]) -> Void) {
+        browser.delegate = self
+        browser.searchForServices(ofType: "_homesafe._tcp.", inDomain: "local.")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self.browser.stop(); done(self.found) }
+    }
+    func netServiceBrowser(_ b: NetServiceBrowser, didFind s: NetService, moreComing: Bool) { services.append(s); s.delegate = self; s.resolve(withTimeout: 3) }
+    func netServiceDidResolveAddress(_ s: NetService) {
+        guard let txt = s.txtRecordData(), let fp = NetService.dictionary(fromTXTRecord: txt)["fp"].flatMap({ String(data: $0, encoding: .utf8) }) else { return }
+        for data in s.addresses ?? [] {
+            data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+                guard let sa = raw.baseAddress?.assumingMemoryBound(to: sockaddr.self), sa.pointee.sa_family == sa_family_t(AF_INET) else { return }
+                var sin = raw.load(as: sockaddr_in.self)
+                var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                inet_ntop(AF_INET, &sin.sin_addr, &buf, socklen_t(INET_ADDRSTRLEN))
+                found.append(["name": s.name, "address": "https://\(String(cString: buf)):\(s.port)", "fingerprint": fp])
+            }
+        }
+    }
 }

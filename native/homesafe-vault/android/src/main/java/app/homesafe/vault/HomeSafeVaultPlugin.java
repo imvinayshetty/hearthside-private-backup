@@ -10,6 +10,10 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
+import android.net.nsd.NsdManager;
+import android.net.nsd.NsdServiceInfo;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
@@ -68,6 +72,7 @@ import org.json.JSONObject;
     name = "HomeSafeVault",
     permissions = {
         @Permission(alias = "media", strings = { Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO }),
+        @Permission(alias = "location", strings = { Manifest.permission.ACCESS_FINE_LOCATION }),
         @Permission(alias = "storage", strings = { Manifest.permission.READ_EXTERNAL_STORAGE })
     }
 )
@@ -84,6 +89,64 @@ public class HomeSafeVaultPlugin extends Plugin {
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private Pending pending;
     private volatile boolean pickingFolder;
+
+    // ---------- Wi-Fi ----------
+
+    /** Reports whether the phone is on Wi-Fi and its network name. Android treats the name as location data. */
+    @PluginMethod
+    public void wifi(PluginCall call) {
+        if (getPermissionState("location") != PermissionState.GRANTED) { requestPermissionForAlias("location", call, "locationPermission"); return; }
+        readWifi(call);
+    }
+
+    @PermissionCallback
+    private void locationPermission(PluginCall call) { readWifi(call); }
+
+    @SuppressWarnings("deprecation")
+    private void readWifi(PluginCall call) {
+        JSObject out = new JSObject();
+        WifiManager wm = (WifiManager) getContext().getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        WifiInfo info = wm == null ? null : wm.getConnectionInfo();
+        boolean on = info != null && info.getNetworkId() != -1;
+        out.put("wifi", on);
+        String ssid = on ? info.getSSID() : null;
+        if (ssid != null && !ssid.equals(WifiManager.UNKNOWN_SSID) && !ssid.equals("<unknown ssid>")) out.put("name", ssid.replaceAll("^\"|\"$", ""));
+        call.resolve(out);
+    }
+
+    /** Finds Vaults announcing _homesafe._tcp on this Wi-Fi for up to 4 seconds. */
+    @PluginMethod
+    public void discover(PluginCall call) {
+        NsdManager nsd = (NsdManager) getContext().getSystemService(Context.NSD_SERVICE);
+        JSArray found = new JSArray();
+        NsdManager.DiscoveryListener[] holder = new NsdManager.DiscoveryListener[1];
+        holder[0] = new NsdManager.DiscoveryListener() {
+            public void onStartDiscoveryFailed(String t, int e) { call.resolve(new JSObject().put("vaults", found)); }
+            public void onStopDiscoveryFailed(String t, int e) {}
+            public void onDiscoveryStarted(String t) {}
+            public void onDiscoveryStopped(String t) {}
+            public void onServiceLost(NsdServiceInfo s) {}
+            public void onServiceFound(NsdServiceInfo s) {
+                nsd.resolveService(s, new NsdManager.ResolveListener() {
+                    public void onResolveFailed(NsdServiceInfo i, int e) {}
+                    public void onServiceResolved(NsdServiceInfo i) {
+                        byte[] fp = i.getAttributes().get("fp");
+                        if (i.getHost() == null || fp == null) return;
+                        JSObject v = new JSObject();
+                        v.put("name", i.getServiceName());
+                        v.put("address", "https://" + i.getHost().getHostAddress() + ":" + i.getPort());
+                        v.put("fingerprint", new String(fp, StandardCharsets.UTF_8));
+                        synchronized (found) { found.put(v); }
+                    }
+                });
+            }
+        };
+        nsd.discoverServices("_homesafe._tcp", NsdManager.PROTOCOL_DNS_SD, holder[0]);
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            try { nsd.stopServiceDiscovery(holder[0]); } catch (Exception ignored) {}
+            synchronized (found) { call.resolve(new JSObject().put("vaults", found)); }
+        }, 4000);
+    }
 
     // ---------- Pairing ----------
 

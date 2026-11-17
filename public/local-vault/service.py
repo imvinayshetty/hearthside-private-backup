@@ -1,4 +1,5 @@
 """HomeSafe LAN pairing service. Run only on the trusted Vault computer."""
+import socket
 import argparse
 import base64
 import datetime as dt
@@ -375,6 +376,19 @@ def server(store, host, port):
     return http, fingerprint
 
 
+def advertise(host, port, fingerprint):
+    """Announces the Vault on home Wi-Fi (_homesafe._tcp) so phones only need the code. Optional: needs zeroconf."""
+    try:
+        from zeroconf import ServiceInfo, Zeroconf
+    except ImportError:
+        print('Wi-Fi discovery off (pip install zeroconf). Phones can still pair with the QR code.')
+        return None
+    zc = Zeroconf(interfaces=[host])
+    info = ServiceInfo('_homesafe._tcp.local.', 'HomeSafe Vault._homesafe._tcp.local.', addresses=[socket.inet_aton(host)], port=port, properties={'v': '1', 'fp': fingerprint})
+    zc.register_service(info)
+    return zc
+
+
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser()
@@ -386,6 +400,7 @@ def main():
     store = Store(args.state, args.drive)
     http, fingerprint = server(store, args.host, args.port)
     threading.Thread(target=http.serve_forever, daemon=True).start()
+    advert = advertise(args.host, args.port, fingerprint)
     print(f'Local Vault: https://{args.host}:{args.port}\nSHA-256: {fingerprint}')
     print('Trusted local console commands: register EMAIL PROFILE | pair EMAIL PHONE | revoke DEVICE_ID | quit')
     try:
