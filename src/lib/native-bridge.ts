@@ -28,7 +28,7 @@ export function installNativeVault(): void {
     async network() {
       const s = await Network.getStatus();
       if (!s.connected || s.connectionType !== "wifi") return { wifi: false };
-      try { const w = await vault.wifi(); return { wifi: true, name: w.name }; } catch { return { wifi: true }; }
+      try { const w = await vault.wifi(); return w.name ? { wifi: true, name: w.name } : { wifi: true }; } catch { return { wifi: true }; }
     },
     async discover() {
       const { vaults } = await vault.discover();
