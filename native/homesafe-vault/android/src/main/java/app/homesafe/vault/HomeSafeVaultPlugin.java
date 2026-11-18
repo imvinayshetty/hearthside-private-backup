@@ -78,11 +78,15 @@ import org.json.JSONObject;
 )
 public class HomeSafeVaultPlugin extends Plugin {
     private static final int CHUNK = 4 * 1024 * 1024;
+    static final int MANIFEST_PAGE = 5000;
     private static final String PREFS = "homesafe_vault", WRAP = "homesafe_vault_wrap";
 
     private static final class Item { final String name; final long bytes; final Uri uri; Item(String n, long b, Uri u) { name = n; bytes = b; uri = u; } }
-    private static final class Transfer { volatile String state = "running"; volatile long sent = 0; volatile long total = 0; volatile String reason; }
+    private static final class Transfer { volatile String state = "running"; volatile long sent = 0; volatile long total = 0; volatile String reason; volatile String code; }
     private static final class Pending { String address, pin, deviceId, challenge, profile, phone; }
+    /** Carries the Vault's machine-readable error code (code_expired, phone_revoked, ...) to the screens. */
+    static final class VaultException extends Exception { final String code; VaultException(String m, String c) { super(m); code = c; } }
+    private static void fail(PluginCall call, Exception e) { if (e instanceof VaultException && ((VaultException) e).code != null) call.reject(message(e), ((VaultException) e).code); else call.reject(message(e)); }
 
     private final Map<String, Item> picked = new HashMap<>();
     private final Map<String, Transfer> transfers = new HashMap<>();
@@ -130,10 +134,11 @@ public class HomeSafeVaultPlugin extends Plugin {
                 nsd.resolveService(s, new NsdManager.ResolveListener() {
                     public void onResolveFailed(NsdServiceInfo i, int e) {}
                     public void onServiceResolved(NsdServiceInfo i) {
-                        byte[] fp = i.getAttributes().get("fp");
+                        byte[] fp = i.getAttributes().get("fp"), ver = i.getAttributes().get("v"), nm = i.getAttributes().get("name");
                         if (i.getHost() == null || fp == null) return;
                         JSObject v = new JSObject();
-                        v.put("name", i.getServiceName());
+                        v.put("name", nm != null ? new String(nm, StandardCharsets.UTF_8) : i.getServiceName());
+                        if (ver != null) v.put("v", new String(ver, StandardCharsets.UTF_8));
                         v.put("address", "https://" + i.getHost().getHostAddress() + ":" + i.getPort());
                         v.put("fingerprint", new String(fp, StandardCharsets.UTF_8));
                         synchronized (found) { found.put(v); }
@@ -176,7 +181,7 @@ public class HomeSafeVaultPlugin extends Plugin {
                 out.put("profile", p.profile);
                 out.put("phone", p.phone);
                 call.resolve(out);
-            } catch (Exception e) { call.reject(message(e)); }
+            } catch (Exception e) { fail(call, e); }
         });
     }
 
@@ -196,7 +201,7 @@ public class HomeSafeVaultPlugin extends Plugin {
                 putSecret("pairing", saved.toString().getBytes(StandardCharsets.UTF_8));
                 pending = null;
                 call.resolve(JSObject.fromJSONObject(session));
-            } catch (Exception e) { call.reject(message(e)); }
+            } catch (Exception e) { fail(call, e); }
         });
     }
 
@@ -211,12 +216,45 @@ public class HomeSafeVaultPlugin extends Plugin {
                 Map<String, Object> body = new TreeMap<>();
                 body.put("deviceId", deviceId); body.put("challenge", challenge); body.put("signature", sign(signingKey(), message));
                 call.resolve(JSObject.fromJSONObject(post(saved.getString("address"), saved.getString("pin"), "/v1/backups", body)));
-            } catch (Exception e) { call.reject(message(e)); }
+            } catch (Exception e) { fail(call, e); }
         });
     }
 
     @PluginMethod
     public void disconnect(PluginCall call) { picked.clear(); call.resolve(); }
+
+    /** Saved Vault address and pinned fingerprint (no keys), used to find the Vault again after an IP change. */
+    @PluginMethod
+    public void savedVault(PluginCall call) {
+        try {
+            byte[] raw = getSecret("pairing");
+            if (raw == null) { call.resolve(new JSObject()); return; }
+            JSONObject saved = new JSONObject(new String(raw, StandardCharsets.UTF_8));
+            call.resolve(new JSObject().put("address", saved.getString("address")).put("fingerprint", saved.getString("pin")));
+        } catch (Exception e) { fail(call, e); }
+    }
+
+    /** Updates the saved address only when the new Vault presents the same pinned fingerprint. */
+    @PluginMethod
+    public void relocate(PluginCall call) {
+        try {
+            String address = call.getString("address"), pin = clean(call.getString("fingerprint"));
+            requirePrivate(address);
+            JSONObject saved = pairing();
+            if (!saved.getString("pin").equals(pin)) throw new VaultException("A different Vault answered at that address. Pair again only if you replaced your Vault.", "certificate_mismatch");
+            saved.put("address", address);
+            putSecret("pairing", saved.toString().getBytes(StandardCharsets.UTF_8));
+            call.resolve();
+        } catch (Exception e) { fail(call, e); }
+    }
+
+    /** Removes the saved pairing (for example after phone_revoked). The device key stays. */
+    @PluginMethod
+    public void forget(PluginCall call) {
+        prefs().edit().remove("pairing").commit();
+        pending = null; picked.clear();
+        call.resolve();
+    }
 
     private JSONObject pairing() throws Exception {
         byte[] raw = getSecret("pairing");
@@ -282,7 +320,7 @@ public class HomeSafeVaultPlugin extends Plugin {
                     }
                 }
                 call.resolve(new JSObject().put("items", items));
-            } catch (Exception e) { call.reject(message(e)); }
+            } catch (Exception e) { fail(call, e); }
         });
     }
 
@@ -304,7 +342,7 @@ public class HomeSafeVaultPlugin extends Plugin {
                     addDocument(items, seen, data.getData());
                 }
                 call.resolve(new JSObject().put("items", items));
-            } catch (Exception e) { call.reject(message(e)); }
+            } catch (Exception e) { fail(call, e); }
         });
     }
 
@@ -368,15 +406,25 @@ public class HomeSafeVaultPlugin extends Plugin {
                 message.put("name", name); message.put("kind", kind); message.put("files", items.size()); message.put("bytes", total);
                 Map<String, Object> body = new TreeMap<>();
                 body.put("deviceId", deviceId); body.put("challenge", challenge); body.put("signature", sign(signingKey(), message));
-                body.put("name", name); body.put("kind", kind); body.put("files", listing);
+                boolean paged = listing.length() > MANIFEST_PAGE;
+                body.put("name", name); body.put("kind", kind); body.put("files", paged ? new JSONArray() : listing);
+                if (paged) { body.put("fileCount", listing.length()); body.put("bytes", total); }
                 JSONObject started = post(address, pin, "/v1/backup/start", body);
                 String id = started.getString("transferId"), token = started.getString("token");
+                // Above 5,000 files the manifest goes in pages before any chunk is sent.
+                for (int offset = 0; paged && offset < listing.length(); offset += MANIFEST_PAGE) {
+                    JSONArray page = new JSONArray();
+                    for (int i = offset; i < Math.min(offset + MANIFEST_PAGE, listing.length()); i++) page.put(listing.get(i));
+                    Map<String, Object> pageBody = new TreeMap<>();
+                    pageBody.put("transferId", id); pageBody.put("token", token); pageBody.put("offset", offset); pageBody.put("files", page);
+                    post(address, pin, "/v1/backup/files", pageBody);
+                }
                 Transfer t = new Transfer(); t.total = total;
                 synchronized (transfers) { transfers.put(id, t); }
                 call.resolve(new JSObject().put("transferId", id));
                 keepAwake(true);
                 new Thread(() -> { run(address, pin, id, token, items, t); keepAwake(false); }).start();
-            } catch (Exception e) { call.reject(message(e)); }
+            } catch (Exception e) { fail(call, e); }
         });
     }
 
@@ -405,7 +453,7 @@ public class HomeSafeVaultPlugin extends Plugin {
             body.put("transferId", id); body.put("token", token);
             post(address, pin, "/v1/backup/finish", body);
             t.state = "complete";
-        } catch (Exception e) { t.reason = message(e); t.state = "failed"; }
+        } catch (Exception e) { t.reason = message(e); if (e instanceof VaultException) t.code = ((VaultException) e).code; t.state = "failed"; }
     }
 
     private void keepAwake(boolean on) {
@@ -422,6 +470,7 @@ public class HomeSafeVaultPlugin extends Plugin {
         if (t == null) { call.reject("Unknown transfer."); return; }
         JSObject out = new JSObject().put("state", t.state).put("sentBytes", t.sent).put("totalBytes", t.total);
         if (t.reason != null) out.put("reason", t.reason);
+        if (t.code != null) out.put("code", t.code);
         call.resolve(out);
     }
 
@@ -470,12 +519,12 @@ public class HomeSafeVaultPlugin extends Plugin {
             ByteArrayOutputStream buf = new ByteArrayOutputStream();
             if (in != null) { byte[] b = new byte[8192]; int r; while ((r = in.read(b)) > 0) buf.write(b, 0, r); in.close(); }
             JSONObject json = buf.size() > 0 ? new JSONObject(buf.toString("UTF-8")) : new JSONObject();
-            if (status != 200) throw new Exception(json.optString("error", "The Vault rejected the request."));
+            if (status < 200 || status >= 300) throw new VaultException(json.optString("error", "The Vault rejected the request."), json.optString("code", null));
             return json;
         } catch (javax.net.ssl.SSLException e) {
-            throw new Exception("Your Vault's certificate does not match. Pair again only if you changed it on purpose.");
+            throw new VaultException("Your Vault's certificate does not match. Pair again only if you changed it on purpose.", "certificate_mismatch");
         } catch (java.io.IOException e) {
-            throw new Exception("Lost contact with your Vault. Check Wi-Fi and that the Vault is running.");
+            throw new VaultException("Lost contact with your Vault. Check Wi-Fi and that the Vault is running.", "unreachable");
         } finally { c.disconnect(); }
     }
 
@@ -498,7 +547,7 @@ public class HomeSafeVaultPlugin extends Plugin {
 
     // ---------- Keys and secure storage ----------
 
-    /** Matches the Vault's json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False) for flat objects. */
+    /** Matches the Node Vault's canonical JSON (sorted keys, no whitespace, JSON.stringify escaping) for flat objects. Checked against protocol/test-vectors.json. */
     static String canonical(Map<String, Object> value) {
         StringBuilder out = new StringBuilder("{");
         Iterator<Map.Entry<String, Object>> it = new TreeMap<>(value).entrySet().iterator();

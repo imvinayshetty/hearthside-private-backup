@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "note": "Must be byte-identical to the Vault copy. Canonical = keys sorted, no whitespace, JSON.stringify escaping (non-ASCII literal). Ed25519 signatures over UTF-8 canonical bytes.",
+  "seedHex": "0707070707070707070707070707070707070707070707070707070707070707",
+  "publicKey": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+  "vectors": [
+    {
+      "name": "pair_begin",
+      "input": {
+        "email": "me@home.com",
+        "code": "123456",
+        "deviceId": "android_0123456789abcdef",
+        "publicKey": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw="
+      },
+      "canonical": "{\"code\":\"123456\",\"deviceId\":\"android_0123456789abcdef\",\"email\":\"me@home.com\",\"publicKey\":\"6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=\"}",
+      "signature": "L6juAqvQaG2KGLOHq3AfTyzB3PAQyiBuHq55hodw6Ln6TkeugDMbTrYj12rkf1vhewDLtSUhjynHCiKuQBvjAQ=="
+    },
+    {
+      "name": "pair_confirm",
+      "input": {
+        "requestId": "req_1",
+        "challenge": "chal_ABC-_",
+        "profile": "Vinay",
+        "phone": "Blue Pixel"
+      },
+      "canonical": "{\"challenge\":\"chal_ABC-_\",\"phone\":\"Blue Pixel\",\"profile\":\"Vinay\",\"requestId\":\"req_1\"}",
+      "signature": "WPlKGlgNa9lKpABzjfVk9G10f8R0vzYHOZ9TlV2q5rRJLIFAjhGzPhAhelyDza+DUszfRE2LMDUQ+4le3A4MCg=="
+    },
+    {
+      "name": "catalog",
+      "input": {
+        "deviceId": "ios_0123456789abcdef",
+        "challenge": "c1",
+        "action": "catalog"
+      },
+      "canonical": "{\"action\":\"catalog\",\"challenge\":\"c1\",\"deviceId\":\"ios_0123456789abcdef\"}",
+      "signature": "20qSg4A/1UJ4kpmZbcUZBZVr2yHUkUqbr35Y+hLN6Jj6KtT9VAXZwE7scMDIcRUt65sxFoSu20Yyh9kJeIZPBw=="
+    },
+    {
+      "name": "backup",
+      "input": {
+        "deviceId": "ios_0123456789abcdef",
+        "challenge": "c2",
+        "action": "backup",
+        "name": "Full_Bckup_181126",
+        "kind": "Full",
+        "files": 12001,
+        "bytes": 5368709120
+      },
+      "canonical": "{\"action\":\"backup\",\"bytes\":5368709120,\"challenge\":\"c2\",\"deviceId\":\"ios_0123456789abcdef\",\"files\":12001,\"kind\":\"Full\",\"name\":\"Full_Bckup_181126\"}",
+      "signature": "MiCPEcH3SzuhmYQ7VSvXRXGu1yJt1AG0B4Q6/ak1cHuY6EAyzckp6bz/ynpd8xz90v7wHh2vZWCXqgGdD7wDAw=="
+    },
+    {
+      "name": "escapes_and_unicode",
+      "input": {
+        "phone": "Café \"Tab\"\t\\ \u0001 नमस्ते 📱",
+        "profile": "Line\nBreak"
+      },
+      "canonical": "{\"phone\":\"Café \\\"Tab\\\"\\t\\\\ \\u0001 नमस्ते 📱\",\"profile\":\"Line\\nBreak\"}",
+      "signature": "URWXZG4bhZkLh0TY3nCPiY3GmyI2hvsi0VPgMgf6U31zFPpJpX9KvnOTk3CJYQLxoYPA8+d2T6nIJjYy4Mn+BQ=="
+    }
+  ]
+}

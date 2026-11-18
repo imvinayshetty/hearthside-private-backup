@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { z } from "zod";
+import { relocatedVault, vaultProblem, type DiscoveredVault, type PairingQr } from "./vault-protocol";
 
 const identity = z.object({ email: z.string().email(), profile: z.string(), phone: z.string() });
 export const offerSchema = identity.extend({ requestId: z.string(), expiresAt: z.number() });
@@ -7,7 +8,7 @@ export const sessionSchema = identity.extend({ connected: z.literal(true) });
 export const catalogSchema = z.object({ backups: z.array(z.object({ name: z.string(), kind: z.enum(["Full", "Custom"]), date: z.string(), files: z.number().nonnegative(), bytes: z.number().nonnegative(), complete: z.boolean() })) });
 export const pickSchema = z.object({ items: z.array(z.object({ name: z.string(), path: z.string(), bytes: z.number().nonnegative() })) });
 export const startSchema = z.object({ transferId: z.string().min(1) });
-export const transferSchema = z.object({ state: z.enum(["running", "complete", "failed"]), sentBytes: z.number().nonnegative(), totalBytes: z.number().nonnegative(), reason: z.string().optional() });
+export const transferSchema = z.object({ state: z.enum(["running", "complete", "failed"]), sentBytes: z.number().nonnegative(), totalBytes: z.number().nonnegative(), reason: z.string().optional(), code: z.string().optional() });
 export type LocalSession = z.infer<typeof sessionSchema>;
 export type PairOffer = z.infer<typeof offerSchema>;
 
@@ -15,8 +16,10 @@ export type PairOffer = z.infer<typeof offerSchema>;
 // All TLS, discovery, keys and certificates remain outside the hosted web app.
 export interface NativeVault {
   network(): Promise<{ wifi: boolean; name?: string }>;
-  discover(): Promise<{ address: string; fingerprint: string }[]>;
-  scanQR(): Promise<{ address: string; fingerprint: string; code: string }>;
+  /** Vaults announcing _homesafe._tcp with TXT v=1 (others are ignored). */
+  discover(): Promise<DiscoveredVault[]>;
+  /** Reads a homesafe://pair?v=1 QR code. */
+  scanQR(): Promise<PairingQr>;
   begin(input: { email: string; code: string; address: string; fingerprint: string }): Promise<unknown>;
   confirm(requestId: string): Promise<unknown>;
   catalog(): Promise<unknown>;
@@ -24,6 +27,10 @@ export interface NativeVault {
   startBackup(input: { name: string; kind: "Full" | "Custom"; paths: string[] }): Promise<unknown>;
   transferStatus(transferId: string): Promise<unknown>;
   disconnect(): Promise<void>;
+  savedVault(): Promise<{ address?: string; fingerprint?: string }>;
+  /** Native side refuses unless the fingerprint equals the pinned one. */
+  relocate(input: { address: string; fingerprint: string }): Promise<void>;
+  forget(): Promise<void>;
 }
 declare global { interface Window { HomeSafeNative?: NativeVault } }
 export function nativeVault(): NativeVault {
@@ -42,4 +49,23 @@ export function useLocalConnection() {
   const value = useContext(ConnectionContext);
   if (!value) throw new Error("Local connection is unavailable.");
   return value;
+}
+/** Runs a Vault call; if the saved Vault is unreachable (IP changed), finds it again by its pinned fingerprint and retries once. */
+export async function withReconnect<T>(bridge: NativeVault, run: () => Promise<T>): Promise<T> {
+  try { return await run(); } catch (e) {
+    if ((e as { code?: string })?.code !== "unreachable") throw e;
+    const saved = await bridge.savedVault().catch(() => ({} as { address?: string; fingerprint?: string }));
+    if (!saved.fingerprint) throw e;
+    const match = relocatedVault(await bridge.discover().catch(() => []), saved.fingerprint);
+    if (!match || match.address === saved.address) throw e;
+    await bridge.relocate({ address: match.address, fingerprint: match.fingerprint });
+    return run();
+  }
+}
+
+/** Clear message for a Vault error; phone_revoked also clears the saved pairing so the user re-pairs. */
+export async function handleVaultError(error: unknown, fallback: string, onRepair: () => void): Promise<string> {
+  const problem = vaultProblem(error, fallback);
+  if (problem.repair) { try { await nativeVault().forget(); } catch { /* already cleared */ } onRepair(); }
+  return problem.message;
 }

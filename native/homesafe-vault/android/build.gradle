@@ -24,3 +24,13 @@ dependencies {
     implementation 'androidx.documentfile:documentfile:1.0.1'
     implementation 'org.bouncycastle:bcprov-jdk18on:1.80'
 }
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+}
+
+// Signing parity: the JUnit test reads the shared protocol/test-vectors.json (identical to the Vault's copy).
+android.testOptions.unitTests.all {
+    systemProperty 'homesafe.vectors', new File(projectDir.canonicalFile, '../../../protocol/test-vectors.json').canonicalPath
+}

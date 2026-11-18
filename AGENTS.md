@@ -33,7 +33,7 @@ use the editor.
 - Keep Vault-compatible path and naming validation in `src/lib/backup-rules.ts` with concrete tests so mobile setup follows the companion's storage rules.
 - Separate real enrollment readiness from the simulated phone flow; never treat draft setup, browser identity or demo MFA as verified native phone enrollment.
 - Connect backup data only through a native local transport after identity and certificate verification; the hosted app must never proxy backup bytes or claim an unavailable Vault protocol exists.
-- Keep the independently installable Python LAN service in `public/local-vault` with protocol documentation and security tests; never run it inside hosted SSR because it requires a trusted local computer and drive.
+- The separate Homesafe Vault Node service (protocol v1, port 7443) is the protocol source of truth; this project ships no Vault service. Protocol rules live in `src/lib/vault-protocol.ts`, and `protocol/test-vectors.json` must stay identical to the Vault's copy so JUnit/XCTest signing parity holds.
 - Keep Login, pairing and Backups as separate content routes sharing memory-only connection context; native secure storage owns device credentials, not browser storage.
 - Native file access, device keys, pinned TLS and Vault upload live in the local Capacitor plugin `native/homesafe-vault` (Swift + Java), exposed to screens only via `src/lib/native-bridge.ts`; the web code must keep working with no native APIs.
 - Mobile builds use `scripts/build-mobile.mjs` (CAPACITOR_BUILD SPA shell into `mobile-web/`) so phones bundle the screens instead of loading the hosted site.
