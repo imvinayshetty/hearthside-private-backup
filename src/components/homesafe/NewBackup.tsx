@@ -3,14 +3,15 @@ import { FolderOpen, Loader2, Play } from "lucide-react";
 import { GhostButton, PrimaryButton } from "./ui";
 import { connectionInput } from "./ConnectionShell";
 import { defaultBackupName, requireAvailableBackup, type BackupKind } from "@/lib/backup-rules";
-import { nativeVault, pickSchema, startSchema, transferSchema } from "@/lib/local-connection";
+import { handleVaultError, nativeVault, pickSchema, startSchema, transferSchema, withReconnect } from "@/lib/local-connection";
+import { vaultProblem } from "@/lib/vault-protocol";
 import type { z } from "zod";
 
 type Item = z.infer<typeof pickSchema>["items"][number];
 type Transfer = z.infer<typeof transferSchema>;
 
 // Shown only inside a verified pairing session (pairing_verified for this profile and phone).
-export function NewBackup({ existing, onDone }: { existing: { name: string; date: string }[]; onDone: () => void }) {
+export function NewBackup({ existing, onDone, onRepair }: { existing: { name: string; date: string }[]; onDone: () => void; onRepair: () => void }) {
   const [kind, setKind] = useState<BackupKind>("Full");
   const [name, setName] = useState(() => defaultBackupName("Full", new Date()));
   const [items, setItems] = useState<Item[]>([]);
@@ -29,7 +30,7 @@ export function NewBackup({ existing, onDone }: { existing: { name: string; date
   async function pick() {
     setError(""); setBusy(true);
     try { setItems(pickSchema.parse(await nativeVault().pick({ kind })).items); }
-    catch (e) { setError(e instanceof Error ? e.message : "Could not open the picker."); }
+    catch (e) { setError(vaultProblem(e, "Could not open the picker.").message); }
     finally { setBusy(false); }
   }
   async function start() {
@@ -38,19 +39,19 @@ export function NewBackup({ existing, onDone }: { existing: { name: string; date
       const clean = requireAvailableBackup(name, kind, new Date(), existing);
       if (!items.length) throw new Error(kind === "Full" ? "Load your phone's files first." : "Choose at least one file or folder.");
       const bridge = nativeVault();
-      const { transferId } = startSchema.parse(await bridge.startBackup({ name: clean, kind, paths: items.map(i => i.path) }));
+      const { transferId } = startSchema.parse(await withReconnect(bridge, () => bridge.startBackup({ name: clean, kind, paths: items.map(i => i.path) })));
       setTransfer({ state: "running", sentBytes: 0, totalBytes: items.reduce((s, i) => s + i.bytes, 0) });
       timer.current = setInterval(async () => {
         try {
           const t = transferSchema.parse(await bridge.transferStatus(transferId));
-          setTransfer(t);
+          if (t.state === "failed" && t.code) { const reason = await handleVaultError({ code: t.code, message: t.reason }, t.reason || "The Vault stopped the transfer.", onRepair); setTransfer({ ...t, reason }); } else setTransfer(t);
           if (t.state !== "running") { if (timer.current) clearInterval(timer.current); onDone(); }
         } catch (e) {
           if (timer.current) clearInterval(timer.current);
           setTransfer(p => ({ state: "failed", sentBytes: p?.sentBytes ?? 0, totalBytes: p?.totalBytes ?? 0, reason: e instanceof Error ? e.message : "Lost contact with your Vault." }));
         }
       }, 1000);
-    } catch (e) { setError(e instanceof Error ? e.message : "The backup could not start."); }
+    } catch (e) { setError(await handleVaultError(e, "The backup could not start.", onRepair)); }
     finally { setBusy(false); }
   }
   const pct = transfer && transfer.totalBytes ? Math.min(100, Math.round((transfer.sentBytes / transfer.totalBytes) * 100)) : 0;

@@ -24,12 +24,15 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
         CAPPluginMethod(name: "startBackup", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "transferStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "disconnect", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "savedVault", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "relocate", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "forget", returnType: CAPPluginReturnPromise),
     ]
 
     private enum Source { case file(URL); case asset(PHAsset) }
     private struct Item { let name: String; let bytes: Int64; let source: Source }
     private struct Pending { let address: String; let pin: String; let deviceId: String; let challenge: String; let profile: String; let phone: String }
-    private final class Transfer { var state = "running"; var sent: Int64 = 0; var total: Int64 = 0; var reason: String? }
+    private final class Transfer { var state = "running"; var sent: Int64 = 0; var total: Int64 = 0; var reason: String?; var code: String? }
 
     private var picked: [String: Item] = [:]
     private var scoped: [URL] = []
@@ -38,6 +41,7 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
     private var transfers: [String: Transfer] = [:]
     private let lock = NSLock()
     private static let chunkSize = 4 * 1024 * 1024
+    static let manifestPage = 5000
 
     // MARK: Wi-Fi
 
@@ -82,7 +86,7 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
                       let profile = offer["profile"] as? String, let phone = offer["phone"] as? String else { throw Failure("The Vault sent an unexpected reply.") }
                 self.pending = Pending(address: address, pin: pin, deviceId: deviceId, challenge: challenge, profile: profile, phone: phone)
                 call.resolve(["requestId": requestId, "expiresAt": offer["expiresAt"] ?? 0, "email": offer["email"] ?? "", "profile": profile, "phone": phone])
-            } catch { call.reject(error.localizedDescription) }
+            } catch { self.fail(call, error) }
         }
     }
 
@@ -96,7 +100,7 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
                 try Keys.savePairing(["address": p.address, "pin": p.pin, "deviceId": p.deviceId])
                 self.pending = nil
                 call.resolve(session)
-            } catch { call.reject(error.localizedDescription) }
+            } catch { self.fail(call, error) }
         }
     }
 
@@ -107,11 +111,36 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
                 let message: [String: Any] = ["deviceId": deviceId, "challenge": challenge, "action": "catalog"]
                 let signature = try Keys.signingKey().signature(for: Canonical.encode(message)).base64EncodedString()
                 call.resolve(try await vault.post("/v1/backups", ["deviceId": deviceId, "challenge": challenge, "signature": signature]))
-            } catch { call.reject(error.localizedDescription) }
+            } catch { self.fail(call, error) }
         }
     }
 
     @objc func disconnect(_ call: CAPPluginCall) { releaseScoped(); picked = [:]; call.resolve() }
+
+    /// Passes the Vault's error code (code_expired, phone_revoked, ...) to the screens.
+    private func fail(_ call: CAPPluginCall, _ error: Error) { call.reject(error.localizedDescription, (error as? Failure)?.code) }
+
+    /// Saved Vault address and pinned fingerprint (no keys), used to find the Vault again after an IP change.
+    @objc func savedVault(_ call: CAPPluginCall) {
+        guard let saved = Keys.loadPairing(), let address = saved["address"], let pin = saved["pin"] else { return call.resolve([:]) }
+        call.resolve(["address": address, "fingerprint": pin])
+    }
+
+    /// Updates the saved address only when the new Vault presents the same pinned fingerprint.
+    @objc func relocate(_ call: CAPPluginCall) {
+        do {
+            guard let address = call.getString("address"), let pin = call.getString("fingerprint")?.replacingOccurrences(of: ":", with: "").lowercased() else { throw Failure("Missing Vault details.") }
+            try Vault.requirePrivate(address)
+            guard var saved = Keys.loadPairing() else { throw Failure("This phone is not paired with a Vault yet.") }
+            guard saved["pin"] == pin else { throw Failure("A different Vault answered at that address. Pair again only if you replaced your Vault.", code: "certificate_mismatch") }
+            saved["address"] = address
+            try Keys.savePairing(saved)
+            call.resolve()
+        } catch { fail(call, error) }
+    }
+
+    /// Removes the saved pairing (for example after phone_revoked). The device key stays.
+    @objc func forget(_ call: CAPPluginCall) { Keys.clearPairing(); pending = nil; releaseScoped(); picked = [:]; call.resolve() }
 
     private func proof() async throws -> (Vault, String, String) {
         guard let saved = Keys.loadPairing(), let address = saved["address"], let pin = saved["pin"], let deviceId = saved["deviceId"] else { throw Failure("This phone is not paired with a Vault yet.") }
@@ -217,15 +246,26 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
                 let total = items.reduce(Int64(0)) { $0 + $1.bytes }
                 let message: [String: Any] = ["deviceId": deviceId, "challenge": challenge, "action": "backup", "name": name, "kind": kind, "files": items.count, "bytes": total]
                 let signature = try Keys.signingKey().signature(for: Canonical.encode(message)).base64EncodedString()
-                let started = try await vault.post("/v1/backup/start", ["deviceId": deviceId, "challenge": challenge, "signature": signature, "name": name, "kind": kind, "files": items.map { ["path": $0.name, "bytes": $0.bytes] }])
+                let listing: [[String: Any]] = items.map { ["path": $0.name, "bytes": $0.bytes] }
+                let paged = listing.count > Self.manifestPage
+                var body: [String: Any] = ["deviceId": deviceId, "challenge": challenge, "signature": signature, "name": name, "kind": kind, "files": paged ? [[String: Any]]() : listing]
+                if paged { body["fileCount"] = listing.count; body["bytes"] = total }
+                let started = try await vault.post("/v1/backup/start", body)
                 guard let id = started["transferId"] as? String, let token = started["token"] as? String else { throw Failure("The Vault did not accept the backup.") }
+                // Above 5,000 files the manifest goes in pages before any chunk is sent.
+                if paged {
+                    for offset in stride(from: 0, to: listing.count, by: Self.manifestPage) {
+                        let page = Array(listing[offset..<min(offset + Self.manifestPage, listing.count)])
+                        _ = try await vault.post("/v1/backup/files", ["transferId": id, "token": token, "offset": offset, "files": page])
+                    }
+                }
                 let transfer = Transfer(); transfer.total = total
                 self.lock.lock(); self.transfers[id] = transfer; self.lock.unlock()
                 call.resolve(["transferId": id])
                 await MainActor.run { UIApplication.shared.isIdleTimerDisabled = true }
                 await self.run(vault, id, token, items, transfer)
                 await MainActor.run { UIApplication.shared.isIdleTimerDisabled = false }
-            } catch { call.reject(error.localizedDescription) }
+            } catch { self.fail(call, error) }
         }
     }
 
@@ -250,7 +290,7 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
             _ = try await vault.post("/v1/backup/finish", ["transferId": id, "token": token])
             lock.lock(); t.state = "complete"; lock.unlock()
         } catch {
-            lock.lock(); t.state = "failed"; t.reason = error.localizedDescription; lock.unlock()
+            lock.lock(); t.state = "failed"; t.reason = error.localizedDescription; t.code = (error as? Failure)?.code; lock.unlock()
         }
     }
 
@@ -276,11 +316,12 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
         guard let id = call.getString("transferId"), let t = transfers[id] else { return call.reject("Unknown transfer.") }
         var out: [String: Any] = ["state": t.state, "sentBytes": t.sent, "totalBytes": t.total]
         if let reason = t.reason { out["reason"] = reason }
+        if let code = t.code { out["code"] = code }
         call.resolve(out)
     }
 }
 
-struct Failure: LocalizedError { let message: String; init(_ m: String) { message = m }; var errorDescription: String? { message } }
+struct Failure: LocalizedError { let message: String; let code: String?; init(_ m: String, code: String? = nil) { message = m; self.code = code }; var errorDescription: String? { message } }
 
 /// Pinned HTTPS client for a literal private IPv4 Vault. No redirects, no system trust.
 final class Vault: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
@@ -312,9 +353,13 @@ final class Vault: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
     private func send(_ request: URLRequest) async throws -> [String: Any] {
         try Vault.requirePrivate(base.absoluteString)
         let data: Data, response: URLResponse
-        do { (data, response) = try await session.data(for: request) } catch { throw Failure("Lost contact with your Vault. Check Wi-Fi and that the Vault is running.") }
+        do { (data, response) = try await session.data(for: request) } catch {
+            if (error as? URLError)?.code == .cancelled { throw Failure("Your Vault's certificate does not match. Pair again only if you changed it on purpose.", code: "certificate_mismatch") }
+            throw Failure("Lost contact with your Vault. Check Wi-Fi and that the Vault is running.", code: "unreachable")
+        }
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw Failure(json["error"] as? String ?? "The Vault rejected the request.") }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status) else { throw Failure(json["error"] as? String ?? "The Vault rejected the request.", code: json["code"] as? String) }
         return json
     }
 
@@ -328,7 +373,7 @@ final class Vault: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
 }
 
-/// Matches the Vault's json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False) for flat objects.
+/// Matches the Node Vault's canonical JSON (sorted keys, no whitespace, JSON.stringify escaping) for flat objects. Checked against protocol/test-vectors.json.
 enum Canonical {
     static func encode(_ value: [String: Any]) throws -> Data {
         let parts = try value.keys.sorted().map { key -> String in
@@ -380,6 +425,10 @@ enum Keys {
         try write("device-id", Data(id.utf8)); return id
     }
     static func savePairing(_ value: [String: String]) throws { try write("pairing", JSONSerialization.data(withJSONObject: value)) }
+    static func clearPairing() {
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "app.homesafe.vault", kSecAttrAccount as String: "pairing"]
+        SecItemDelete(q as CFDictionary)
+    }
     static func loadPairing() -> [String: String]? { read("pairing").flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] } }
 }
 
@@ -395,14 +444,18 @@ final class Discovery: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
     }
     func netServiceBrowser(_ b: NetServiceBrowser, didFind s: NetService, moreComing: Bool) { services.append(s); s.delegate = self; s.resolve(withTimeout: 3) }
     func netServiceDidResolveAddress(_ s: NetService) {
-        guard let txt = s.txtRecordData(), let fp = NetService.dictionary(fromTXTRecord: txt)["fp"].flatMap({ String(data: $0, encoding: .utf8) }) else { return }
+        guard let txt = s.txtRecordData() else { return }
+        let record = NetService.dictionary(fromTXTRecord: txt)
+        guard let fp = record["fp"].flatMap({ String(data: $0, encoding: .utf8) }) else { return }
+        let version = record["v"].flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        let label = record["name"].flatMap { String(data: $0, encoding: .utf8) } ?? s.name
         for data in s.addresses ?? [] {
             data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
                 guard let sa = raw.baseAddress?.assumingMemoryBound(to: sockaddr.self), sa.pointee.sa_family == sa_family_t(AF_INET) else { return }
                 var sin = raw.load(as: sockaddr_in.self)
                 var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
                 inet_ntop(AF_INET, &sin.sin_addr, &buf, socklen_t(INET_ADDRSTRLEN))
-                found.append(["name": s.name, "address": "https://\(String(cString: buf)):\(s.port)", "fingerprint": fp])
+                found.append(["name": label, "v": version, "address": "https://\(String(cString: buf)):\(s.port)", "fingerprint": fp])
             }
         }
     }

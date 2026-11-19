@@ -50,7 +50,7 @@ git pull && npm install && npm run cap:sync
 - Keep HomeSafe open during a backup (the screen stays awake); background transfers are not implemented.
 - iPhone Full backup covers the Photos library. Photos stored only in iCloud are never downloaded — the backup stops with a message instead.
 - Android Full backup covers photos and videos the system allows; use Custom for other folders.
-- Wi-Fi discovery is not available; pair with the code or QR from the Vault console.
+- Pair three ways: pick a Vault found on Wi-Fi, scan the Vault's QR code, or enter the address, fingerprint and code manually. Press **Pair mobile device** on the Vault to get a 2-minute code.
 
 
 ### Wi-Fi name and automatic Vault finding
@@ -58,4 +58,9 @@ git pull && npm install && npm run cap:sync
   `NSLocationWhenInUseUsageDescription` = "Show which Wi-Fi you're on so you know you're at home." and `NSBonjourServices` = `_homesafe._tcp`.
   Note: a free Personal Team may not offer the Wi-Fi capability; the app then shows "Wi-Fi connected" without the name.
 - **Android:** the plugin adds location, Wi-Fi state and multicast permissions. Android asks for location once — it is how Android protects Wi-Fi names.
-- **Vault computer:** `pip install zeroconf` so phones find the Vault by themselves. Without it, pair by scanning the QR code.
+- **Vault computer:** run the Homesafe Vault service (port 7443); it announces `_homesafe._tcp` with TXT `v=1`, `name`, `fp`. Phones ignore Vaults with any other `v`.
+
+### Signing parity tests
+- Android: `cd android && ./gradlew :homesafe-vault-native:testDebugUnitTest` (JUnit, reads `protocol/test-vectors.json`).
+- iPhone: `swift test --package-path native/homesafe-vault` (XCTest).
+Keep `protocol/test-vectors.json` byte-identical to the Vault project's copy.
