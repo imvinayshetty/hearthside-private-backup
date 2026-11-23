@@ -58,9 +58,12 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"   # Capacitor 7 compiles with Java 21
-      - uses: android-actions/setup-android@v3
-      - name: Android SDK platform used by Capacitor 7
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Android SDK (runner's preinstalled copy)
+        run: |
+          SDKM="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" > /dev/null
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
       - uses: gradle/actions/setup-gradle@v4
 
       - run: bun install --frozen-lockfile
@@ -111,8 +114,12 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - uses: android-actions/setup-android@v3
-      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Android SDK (runner's preinstalled copy)
+        run: |
+          SDKM="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" > /dev/null
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
       - uses: gradle/actions/setup-gradle@v4
       - run: bun install --frozen-lockfile
       - run: npm run build:mobile
