@@ -1,6 +1,7 @@
-# HomeSafe (mobile): tests, Android debug APK, and an optional iOS compile check.
-# iOS uses expensive macOS minutes on private repos, so it only runs when you start it by hand
-# ("Run workflow" -> build_ios). It compiles for the simulator only: no signing, nothing to install.
+# HomeSafe (mobile): tests, Android debug APK, and an iOS compile check.
+# The iOS check runs on every push and on manual runs (untick build_ios to skip it), but not on pull
+# requests, because macOS minutes are billed at 10x on private repos. It compiles for the simulator
+# only: no signing, nothing to install.
 name: Mobile build
 
 on:
@@ -10,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       build_ios:
-        description: "Also run the iOS compile check (macOS runner)"
+        description: "Run the iOS compile check (macOS runner)"
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -144,9 +145,8 @@ jobs:
   ios-compile:
     name: iOS compile check (simulator, unsigned)
     needs: web-tests
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_ios }}
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_ios) }}
     runs-on: macos-latest
-    continue-on-error: true   # first-ever iOS build of this plugin; remove once it passes
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
