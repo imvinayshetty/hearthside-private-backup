@@ -768,9 +768,20 @@ public class HomeSafeVaultPlugin extends Plugin {
     // ---------- Keys and secure storage ----------
 
     /** Matches the Node Vault's canonical JSON (sorted keys, no whitespace, JSON.stringify escaping) for flat objects. Checked against protocol/test-vectors.json. */
+    /** The Vault sorts keys by Unicode code point (UTF-8 byte order). Java's String order is UTF-16, which differs for characters above U+FFFF. */
+    static final java.util.Comparator<String> BY_CODE_POINT = (a, b) -> {
+        int i = 0, j = 0;
+        while (i < a.length() && j < b.length()) {
+            int x = a.codePointAt(i), y = b.codePointAt(j);
+            if (x != y) return Integer.compare(x, y);
+            i += Character.charCount(x); j += Character.charCount(y);
+        }
+        return Integer.compare(a.length() - i, b.length() - j);
+    };
     static String canonical(Map<String, Object> value) {
         StringBuilder out = new StringBuilder("{");
-        Iterator<Map.Entry<String, Object>> it = new TreeMap<>(value).entrySet().iterator();
+        Map<String, Object> sorted = new TreeMap<>(BY_CODE_POINT); sorted.putAll(value);
+        Iterator<Map.Entry<String, Object>> it = sorted.entrySet().iterator();
         while (it.hasNext()) {
             Map.Entry<String, Object> e = it.next();
             out.append(quote(e.getKey())).append(':');

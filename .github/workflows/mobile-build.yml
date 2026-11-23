@@ -1,7 +1,6 @@
-# HomeSafe (mobile): tests, Android debug APK, and an iOS compile check.
-# The iOS check runs on every push and on manual runs (untick build_ios to skip it), but not on pull
-# requests, because macOS minutes are billed at 10x on private repos. It compiles for the simulator
-# only: no signing, nothing to install.
+# HomeSafe (mobile): tests, Android debug APK + signing parity, and the iOS simulator build.
+# Every job runs on every push, pull request and manual run. Nothing is optional: if any step of any job
+# fails, or any job is skipped, the "All mobile checks passed" job fails, so the whole workflow fails.
 name: Mobile build
 
 on:
@@ -9,11 +8,6 @@ on:
     branches: [main, prod-ready]
   pull_request:
   workflow_dispatch:
-    inputs:
-      build_ios:
-        description: "Run the iOS compile check (macOS runner)"
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -98,7 +92,8 @@ jobs:
               echo "Using the stored debug keystore."
             else
               rm -f ~/.android/debug.keystore
-              echo "::warning::ANDROID_DEBUG_KEYSTORE_B64 is not a valid base64 keystore with password 'android'. Building with a fresh key instead. See the lines above for why."
+              echo "::error::ANDROID_DEBUG_KEYSTORE_B64 is not a valid base64 keystore with password 'android'. Re-create the secret with: base64 -w0 debug.keystore (see the lines above for why)."
+              exit 1
             fi
           else
             echo "::warning::No ANDROID_DEBUG_KEYSTORE_B64 secret. Every build is signed with a new key, so Android will refuse to update an installed copy: uninstall first (this removes the phone's pairing)."
@@ -116,12 +111,10 @@ jobs:
           if-no-files-found: error
 
   # Signing parity: the Java canonical-JSON code against protocol/test-vectors.json.
-  # Not yet run anywhere, so a failure here is shown but does not fail the whole workflow.
   android-signing-parity:
     name: Android signing parity (JUnit)
-    needs: web-tests
+    needs: [vectors-guard, web-tests]
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -156,8 +149,7 @@ jobs:
 
   ios-compile:
     name: iOS compile check (simulator, unsigned)
-    needs: web-tests
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_ios) }}
+    needs: [vectors-guard, web-tests]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -189,4 +181,31 @@ jobs:
           if [ -d ios/App/App.xcworkspace ]; then TARGET=(-workspace ios/App/App.xcworkspace); else TARGET=(-project ios/App/App.xcodeproj); fi
           xcodebuild "${TARGET[@]}" -scheme App -configuration Debug \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO build
+            CODE_SIGNING_ALLOWED=NO -derivedDataPath build/ios build
+
+      - name: Package the simulator app
+        run: |
+          APP="$(find build/ios/Build/Products/Debug-iphonesimulator -maxdepth 1 -name '*.app' | head -1)"
+          test -n "$APP" && test -d "$APP"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" HomeSafe-ios-simulator.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homesafe-ios-simulator-app
+          path: HomeSafe-ios-simulator.zip
+          retention-days: 14
+          if-no-files-found: error
+
+  # Single result for branch protection: every job above must have succeeded. A skipped, cancelled or failed job fails this.
+  build-status:
+    name: All mobile checks passed
+    if: ${{ always() }}
+    needs: [vectors-guard, web-tests, android-apk, android-signing-parity, ios-compile]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail unless every job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null
