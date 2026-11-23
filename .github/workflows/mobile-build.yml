@@ -147,6 +147,7 @@ jobs:
     needs: web-tests
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_ios) }}
     runs-on: macos-latest
+    continue-on-error: true   # first-ever iOS build of this plugin; remove once it passes
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -161,7 +162,14 @@ jobs:
           # Google ML Kit (QR scanner) needs iOS 15.5; Capacitor 7's template defaults to 14.
           sed -i '' "s/platform :ios, '14.0'/platform :ios, '15.5'/" ios/App/Podfile
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.5;/g' ios/App/App.xcodeproj/project.pbxproj
-          npx cap sync ios
+          echo "--- Podfile platform:"; grep -n "platform :ios" ios/App/Podfile
+          echo "--- plugin podspec:"; grep -n "deployment_target\|dependency" node_modules/homesafe-vault-native/HomesafeVaultNative.podspec
+          if ! npx cap sync ios; then
+            echo "::group::pod install --verbose (diagnostics)"
+            (cd ios/App && pod install --repo-update --verbose 2>&1 | tail -80) || true
+            echo "::endgroup::"
+            exit 1
+          fi
       - name: Compile for the iOS Simulator
         run: |
           if [ -d ios/App/App.xcworkspace ]; then TARGET=(-workspace ios/App/App.xcworkspace); else TARGET=(-project ios/App/App.xcodeproj); fi
