@@ -158,9 +158,9 @@ jobs:
       - name: Create and sync the iOS project
         run: |
           [ -d ios ] || npx cap add ios
-          # The plugin needs iOS 15; Capacitor 7's template defaults to 14.
-          sed -i '' "s/platform :ios, '14.0'/platform :ios, '15.0'/" ios/App/Podfile
-          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' ios/App/App.xcodeproj/project.pbxproj
+          # Google ML Kit (QR scanner) needs iOS 15.5; Capacitor 7's template defaults to 14.
+          sed -i '' "s/platform :ios, '14.0'/platform :ios, '15.5'/" ios/App/Podfile
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.5;/g' ios/App/App.xcodeproj/project.pbxproj
           npx cap sync ios
       - name: Compile for the iOS Simulator
         run: |
