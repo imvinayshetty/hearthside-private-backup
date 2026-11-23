@@ -1,0 +1,155 @@
+# HomeSafe (mobile): tests, Android debug APK, and an optional iOS compile check.
+# iOS uses expensive macOS minutes on private repos, so it only runs when you start it by hand
+# ("Run workflow" -> build_ios). It compiles for the simulator only: no signing, nothing to install.
+name: Mobile build
+
+on:
+  push:
+    branches: [main, prod-ready]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      build_ios:
+        description: "Also run the iOS compile check (macOS runner)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Both repos must carry the byte-identical protocol/test-vectors.json. If you change it,
+  # change it in BOTH repos and update the hash below in BOTH workflows (sha256sum <file>).
+  vectors-guard:
+    name: Shared protocol vectors unchanged
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "856ded0e2e2fda1f76d94a1a1715fa1a916888d79804e5c7706afb1d23a2ffa5  protocol/test-vectors.json" | sha256sum -c -
+
+  web-tests:
+    name: "Screens - tests and typecheck"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bunx vitest run
+      - run: bunx tsc --noEmit
+
+  android-apk:
+    name: Android debug APK
+    needs: [vectors-guard, web-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"   # Capacitor 7 compiles with Java 21
+      - uses: android-actions/setup-android@v3
+      - name: Android SDK platform used by Capacitor 7
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: bun install --frozen-lockfile
+      - run: npm run build:mobile
+
+      - name: Create and sync the Android project
+        run: |
+          [ -d android ] || npx cap add android
+          npx cap sync android
+
+      - name: Use a stable debug signing key (optional)
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            mkdir -p ~/.android
+            echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+            echo "Using the stored debug keystore."
+          else
+            echo "::warning::No ANDROID_DEBUG_KEYSTORE_B64 secret. Every build is signed with a new key, so Android will refuse to update an installed copy: uninstall first (this removes the phone's pairing)."
+          fi
+
+      - name: Build the APK
+        working-directory: android
+        run: ./gradlew assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homesafe-android-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+          if-no-files-found: error
+
+  # Signing parity: the Java canonical-JSON code against protocol/test-vectors.json.
+  # Not yet run anywhere, so a failure here is shown but does not fail the whole workflow.
+  android-signing-parity:
+    name: Android signing parity (JUnit)
+    needs: web-tests
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: bun install --frozen-lockfile
+      - run: npm run build:mobile
+      - run: |
+          [ -d android ] || npx cap add android
+          npx cap sync android
+      - name: Run the plugin unit tests
+        working-directory: android
+        run: ./gradlew :homesafe-vault-native:testDebugUnitTest
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: android-parity-test-report
+          path: native/homesafe-vault/android/build/reports/tests
+          if-no-files-found: ignore
+
+  ios-compile:
+    name: iOS compile check (simulator, unsigned)
+    needs: web-tests
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_ios }}
+    runs-on: macos-latest
+    continue-on-error: true   # first-ever iOS build of this plugin; remove once it passes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: npm run build:mobile
+      - name: Create and sync the iOS project
+        run: |
+          [ -d ios ] || npx cap add ios
+          npx cap sync ios
+      - name: Compile for the iOS Simulator
+        run: |
+          if [ -d ios/App/App.xcworkspace ]; then TARGET=(-workspace ios/App/App.xcworkspace); else TARGET=(-project ios/App/App.xcodeproj); fi
+          xcodebuild "${TARGET[@]}" -scheme App -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build
