@@ -82,7 +82,9 @@ jobs:
           if [ -n "$KEYSTORE_B64" ]; then
             mkdir -p ~/.android
             CLEAN="$(printf '%s' "$KEYSTORE_B64" | tr -d ' \t\r\n"'"'"'')"
-            echo "Secret length: ${#KEYSTORE_B64} chars (${#CLEAN} after cleaning)"
+            # Copy/paste often drops the trailing "=" padding; restore it.
+            while [ $(( ${#CLEAN} % 4 )) -ne 0 ]; do CLEAN="${CLEAN}="; done
+            echo "Secret length: ${#KEYSTORE_B64} chars (${#CLEAN} after cleaning and padding)"
             BAD="$(printf '%s' "$CLEAN" | tr -d 'A-Za-z0-9+/=' | wc -c | tr -d ' ')"
             echo "Characters outside the base64 alphabet: $BAD"
             OK=0
