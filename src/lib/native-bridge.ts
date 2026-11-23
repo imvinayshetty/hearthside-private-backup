@@ -18,6 +18,8 @@ type Plugin = {
   cancelBackup(i: { transferId: string }): Promise<unknown>;
   /** The drive a Vault saves to. No argument: the paired Vault. */
   vaultStatus(i?: { address: string; fingerprint: string }): Promise<unknown>;
+  /** Sends data that is thrown away for a few seconds and asks the Vault how fast its drive writes. */
+  speedTest(): Promise<unknown>;
   transferStatus(i: { transferId: string }): Promise<unknown>;
   disconnect(): Promise<void>;
   savedVault(): Promise<{ address?: string; fingerprint?: string }>;
@@ -57,6 +59,7 @@ export function installNativeVault(): void {
     resolveProblems: (i) => vault.resolveProblems(i),
     cancelBackup: (i) => vault.cancelBackup(i),
     vaultStatus: (i) => vault.vaultStatus(i),
+    speedTest: () => vault.speedTest(),
     transferStatus: (transferId) => vault.transferStatus({ transferId }),
     disconnect: () => vault.disconnect(),
     savedVault: () => vault.savedVault(),

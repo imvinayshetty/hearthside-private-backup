@@ -90,7 +90,7 @@ public class HomeSafeVaultPlugin extends Plugin {
         final Map<Integer, String> problems = java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>());
         final Set<Integer> done = java.util.Collections.synchronizedSet(new HashSet<>()), skipped = java.util.Collections.synchronizedSet(new HashSet<>());
         final java.util.concurrent.BlockingQueue<JSONArray> decisions = new java.util.concurrent.LinkedBlockingQueue<>();
-        volatile boolean cancel; List<Item> items; }
+        volatile boolean cancel, staged; List<Item> items; }
     /** One file could not be read or changed while it was being copied. The backup carries on with the next file. */
     static final class FileProblem extends Exception { FileProblem(String m) { super(m); } }
     private interface Step { void go(int index, long offset) throws Exception; }
@@ -471,7 +471,7 @@ public class HomeSafeVaultPlugin extends Plugin {
                 applyDecisions(address, pin, id, token, items, t, actions);
                 retrying(address, pin, id, token, t, (i, o) -> copyFrom(address, pin, id, token, items, t, 0, 0));
             }
-            retrying(address, pin, id, token, t, (i, o) -> { Map<String, Object> body = new TreeMap<>(); body.put("transferId", id); body.put("token", token); post(address, pin, "/v1/backup/finish", body); });
+            retrying(address, pin, id, token, t, (i, o) -> { Map<String, Object> body = new TreeMap<>(); body.put("transferId", id); body.put("token", token); t.staged = post(address, pin, "/v1/backup/finish", body).optBoolean("staged", false); });
             t.state = "complete"; t.reason = null;
         } catch (Exception e) {
             t.reason = message(e); if (e instanceof VaultException) t.code = ((VaultException) e).code; t.state = "failed";
@@ -677,6 +677,40 @@ public class HomeSafeVaultPlugin extends Plugin {
         call.resolve();
     }
 
+    /**
+     * Where the time goes: Wi-Fi speed (data sent and thrown away for a few seconds) and how fast the Vault's drive and its staging folder write.
+     * Nothing is stored on the Vault.
+     */
+    @PluginMethod
+    public void speedTest(PluginCall call) {
+        io.execute(() -> {
+            try {
+                JSONObject saved = pairing();
+                String address = saved.getString("address"), pin = saved.getString("pin"), deviceId = saved.getString("deviceId"), challenge = challenge(saved);
+                Map<String, Object> message = new TreeMap<>();
+                message.put("deviceId", deviceId); message.put("challenge", challenge); message.put("action", "speedtest");
+                Map<String, Object> body = new TreeMap<>();
+                body.put("deviceId", deviceId); body.put("challenge", challenge); body.put("signature", sign(signingKey(), message));
+                String token = post(address, pin, "/v1/speedtest/start", body).getString("token");
+                byte[] block = new byte[1024 * 1024]; new SecureRandom().nextBytes(block);
+                long started = android.os.SystemClock.elapsedRealtime(), sent = 0;
+                while (sent < 32L * 1024 * 1024 && android.os.SystemClock.elapsedRealtime() - started < 8000) {
+                    HttpsURLConnection c = open(address, pin, "/v1/speedtest/chunk");
+                    c.setRequestProperty("Content-Type", "application/octet-stream");
+                    c.setRequestProperty("X-Speedtest-Token", token);
+                    send(c, block); sent += block.length;
+                }
+                double seconds = Math.max(0.001, (android.os.SystemClock.elapsedRealtime() - started) / 1000.0);
+                Map<String, Object> fin = new TreeMap<>(); fin.put("token", token);
+                JSONObject disk = post(address, pin, "/v1/speedtest/finish", fin);
+                JSObject out = new JSObject().put("networkBytesPerSecond", Math.round(sent / seconds)).put("staging", disk.optBoolean("staging", false));
+                if (!disk.isNull("driveBytesPerSecond")) out.put("driveBytesPerSecond", disk.getLong("driveBytesPerSecond"));
+                if (!disk.isNull("stagingBytesPerSecond")) out.put("stagingBytesPerSecond", disk.getLong("stagingBytesPerSecond"));
+                call.resolve(out);
+            } catch (Exception e) { fail(call, e); }
+        });
+    }
+
     @PluginMethod
     public void transferStatus(PluginCall call) {
         Transfer t;
@@ -690,7 +724,7 @@ public class HomeSafeVaultPlugin extends Plugin {
         if (t.reason != null) out.put("reason", t.reason);
         JSArray review = new JSArray();
         synchronized (t.problems) { for (Map.Entry<Integer, String> e : t.problems.entrySet()) review.put(new JSObject().put("index", e.getKey()).put("name", t.items.get(e.getKey()).name).put("reason", e.getValue())); }
-        out.put("problems", review).put("skippedCount", t.skipped.size());
+        out.put("problems", review).put("skippedCount", t.skipped.size()).put("staged", t.staged);
         if (t.code != null) out.put("code", t.code);
         call.resolve(out);
     }

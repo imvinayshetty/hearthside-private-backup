@@ -3,7 +3,8 @@ import { FolderOpen, Loader2, Play } from "lucide-react";
 import { GhostButton, PrimaryButton } from "./ui";
 import { connectionInput } from "./ConnectionShell";
 import { defaultBackupName, requireAvailableBackup, type BackupKind } from "@/lib/backup-rules";
-import { compareSchema, handleVaultError, nativeVault, pickSchema, startSchema, transferSchema, withReconnect } from "@/lib/local-connection";
+import { compareSchema, handleVaultError, nativeVault, pickSchema, speedTestSchema, startSchema, transferSchema, withReconnect, type SpeedTest } from "@/lib/local-connection";
+import { createEtaEstimator } from "@/lib/eta";
 import { vaultProblem } from "@/lib/vault-protocol";
 import type { z } from "zod";
 
@@ -36,6 +37,8 @@ export function NewBackup({ existing, onDone, onRepair, freeBytes }: { freeBytes
   const [transferId, setTransferId] = useState("");
   const [renames, setRenames] = useState<Record<number, string>>({});
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const eta = useRef(createEtaEstimator());
+  const [speed, setSpeed] = useState<SpeedTest | "testing" | null>(null);
   useEffect(() => () => { if (timer.current) clearInterval(timer.current); }, []);
 
   const today = new Date();
@@ -96,6 +99,11 @@ export function NewBackup({ existing, onDone, onRepair, freeBytes }: { freeBytes
     if (!window.confirm("Cancel this backup? Files already copied stay on your Vault, and you can start again or sync changes later.")) return;
     try { await nativeVault().cancelBackup({ transferId }); } catch (e) { setError(vaultProblem(e, "Could not cancel.").message); }
   }
+  const left = transfer?.state === "running" ? eta.current.update(transfer.sentBytes, transfer.totalBytes, transfer.bytesPerSecond) : null;
+  async function testSpeed() {
+    setSpeed("testing"); setError("");
+    try { setSpeed(speedTestSchema.parse(await nativeVault().speedTest())); } catch (e) { setSpeed(null); setError(vaultProblem(e, "The speed test could not run.").message); }
+  }
   const pct = transfer && transfer.totalBytes ? Math.min(100, Math.round((transfer.sentBytes / transfer.totalBytes) * 100)) : 0;
   const folders = mode === "Full" ? folderSummary(items) : [];
   const options: { id: Mode; title: string; hint: string }[] = [
@@ -139,13 +147,27 @@ export function NewBackup({ existing, onDone, onRepair, freeBytes }: { freeBytes
         <div className="mt-3 flex flex-wrap gap-2"><GhostButton onClick={() => void decide(transfer.problems.map(p => ({ index: p.index, action: "retry" as const })))}>Retry all</GhostButton><GhostButton onClick={() => void decide(transfer.problems.map(p => ({ index: p.index, action: "skip" as const })))}>Skip all</GhostButton></div>
       </div>}
       {(transfer.state === "running" || transfer.state === "waiting") && <><div className="h-2 overflow-hidden rounded-full bg-ink/10"><div className="h-full bg-sage transition-all" style={{ width: `${pct}%` }} /></div>
-        <p className="mt-2 text-slate">{pct}% · {mb(transfer.sentBytes)} of {mb(transfer.totalBytes)}{transfer.state === "running" && transfer.bytesPerSecond ? ` · ${(transfer.bytesPerSecond / 1048576).toFixed(1)} MB/s` : ""}</p>
+        <p className="mt-2 text-slate">{pct}% · {mb(transfer.sentBytes)} of {mb(transfer.totalBytes)}{transfer.state === "running" && transfer.bytesPerSecond ? ` · ${(transfer.bytesPerSecond / 1048576).toFixed(1)} MB/s` : ""}{left ? ` · ${left} left` : ""}</p>
         {transfer.problems.length > 0 && <p className="mt-1 text-warn">{transfer.problems.length} {transfer.problems.length === 1 ? "file" : "files"} could not be copied. The backup continues, and you can review {transfer.problems.length === 1 ? "it" : "them"} at the end.</p>}
         {transfer.state === "waiting" && <p className="mt-1 text-warn">{transfer.reason || "Waiting for your Vault…"} The backup continues where it stopped.</p>}</>}
+      {!running && <div className="mt-4 text-sm"><GhostButton disabled={speed === "testing"} onClick={() => void testSpeed()}>{speed === "testing" ? "Testing speed…" : "Test speed"}</GhostButton>{speed && speed !== "testing" && <p role="status" className="mt-2 text-slate">{speedSummary(speed)}</p>}</div>}
       {running && <GhostButton className="mt-3" onClick={() => void cancel()}>Cancel backup</GhostButton>}
-      {transfer.state === "complete" && <p className="text-sagedeep">Backup complete · {mb(transfer.sentBytes)} saved to your Vault.{transfer.skippedCount > 0 ? ` ${transfer.skippedCount} skipped ${transfer.skippedCount === 1 ? "file is" : "files are"} listed in the backup details.` : ""}</p>}
+      {transfer.state === "complete" && <p className="text-sagedeep">{transfer.staged ? `Backup received by your Vault computer · ${mb(transfer.sentBytes)} sent. It is now being saved to your drive and your phone is free.` : `Backup complete · ${mb(transfer.sentBytes)} saved to your Vault.`}{transfer.skippedCount > 0 ? ` ${transfer.skippedCount} skipped ${transfer.skippedCount === 1 ? "file is" : "files are"} listed in the backup details.` : ""}</p>}
       {transfer.state === "failed" && <p className="text-destructive">{transfer.code === "cancelled" ? "Backup cancelled. Files already copied are safe on your Vault." : `Backup failed: ${transfer.reason || "The Vault stopped the transfer."}`}</p>}
     </div>}
     {error && <p role="alert" className="mt-4 text-sm text-destructive">{error}</p>}
   </section>;
+}
+
+/** What the speed test found, and which part is the slowest. Speeds are in MB/s. */
+export function speedSummary(t: SpeedTest): string {
+  const mbps = (n: number) => `${(n / 1048576).toFixed(1)} MB/s`;
+  const parts = [`Wi-Fi ${mbps(t.networkBytesPerSecond)}`];
+  if (t.driveBytesPerSecond !== undefined) parts.push(`drive ${mbps(t.driveBytesPerSecond)}`);
+  if (t.stagingBytesPerSecond !== undefined) parts.push(`computer disk ${mbps(t.stagingBytesPerSecond)}`);
+  const slow = t.driveBytesPerSecond !== undefined && t.driveBytesPerSecond < t.networkBytesPerSecond * 0.7;
+  const verdict = slow
+    ? (t.staging ? " The drive is the slowest part. Your phone sends to the computer first, so it is not kept waiting for the drive." : " The drive is the slowest part. Use a faster USB port or drive, or free space on the computer's disk so backups can be saved there first.")
+    : t.networkBytesPerSecond < 5 * 1048576 ? " Wi-Fi is the slowest part. Use 5 GHz Wi-Fi, stay close to the router, or put the computer on a network cable." : " Both look healthy.";
+  return parts.join(" · ") + "." + verdict;
 }

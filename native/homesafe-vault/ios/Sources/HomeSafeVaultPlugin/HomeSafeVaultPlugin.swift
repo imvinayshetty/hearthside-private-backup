@@ -27,6 +27,7 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
         CAPPluginMethod(name: "vaultStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "resolveProblems", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "cancelBackup", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "speedTest", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "disconnect", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "savedVault", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "relocate", returnType: CAPPluginReturnPromise),
@@ -46,7 +47,7 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
         /// Files that could not be copied and wait for the owner's decision (index -> reason), files already stored, and files the owner chose to skip.
         var problems: [Int: String] = [:]; var done = Set<Int>(); var skipped = Set<Int>()
         var decisions: [[Decision]] = []
-        var cancel = false
+        var cancel = false, staged = false
         var items: [Item] = []
     }
 
@@ -321,7 +322,7 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
                 try await applyDecisions(vault, id, token, t, actions ?? [])
                 try await retrying(vault, ids, t) { _, _ in try await self.copyFrom(vault, id, token, t, 0, 0) }
             }
-            try await retrying(vault, ids, t) { _, _ in _ = try await vault.post("/v1/backup/finish", ids) }
+            try await retrying(vault, ids, t) { _, _ in let r = try await vault.post("/v1/backup/finish", ids); self.locked { t.staged = (r["staged"] as? Bool) ?? false } }
             locked { t.state = "complete"; t.reason = nil }
         } catch {
             locked { t.state = "failed"; t.reason = error.localizedDescription; t.code = (error as? Failure)?.code }
@@ -517,6 +518,29 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
         }
     }
 
+    /// Where the time goes: Wi-Fi speed (data sent and thrown away for a few seconds) and how fast the Vault's drive and its staging folder write.
+    /// Nothing is stored on the Vault.
+    @objc func speedTest(_ call: CAPPluginCall) {
+        Task {
+            do {
+                let (vault, deviceId, challenge) = try await self.proof()
+                let message: [String: Any] = ["deviceId": deviceId, "challenge": challenge, "action": "speedtest"]
+                let signature = try Keys.signingKey().signature(for: Canonical.encode(message)).base64EncodedString()
+                let started = try await vault.post("/v1/speedtest/start", ["deviceId": deviceId, "challenge": challenge, "signature": signature])
+                guard let token = started["token"] as? String else { throw Failure("The Vault sent an unexpected reply.") }
+                var block = Data(count: 1024 * 1024); block.withUnsafeMutableBytes { _ = SecRandomCopyBytes(kSecRandomDefault, $0.count, $0.baseAddress!) }
+                let begun = Date(); var sent = 0
+                while sent < 32 * 1024 * 1024 && Date().timeIntervalSince(begun) < 8 { try await vault.speedChunk(token, block); sent += block.count }
+                let seconds = max(0.001, Date().timeIntervalSince(begun))
+                let disk = try await vault.post("/v1/speedtest/finish", ["token": token])
+                var out: [String: Any] = ["networkBytesPerSecond": Int((Double(sent) / seconds).rounded()), "staging": (disk["staging"] as? Bool) ?? false]
+                if let d = (disk["driveBytesPerSecond"] as? NSNumber)?.int64Value { out["driveBytesPerSecond"] = d }
+                if let d = (disk["stagingBytesPerSecond"] as? NSNumber)?.int64Value { out["stagingBytesPerSecond"] = d }
+                call.resolve(out)
+            } catch { self.fail(call, error) }
+        }
+    }
+
     /// Decisions for files that could not be copied: [{ index, action: "retry" | "rename" | "skip", name? }].
     @objc func resolveProblems(_ call: CAPPluginCall) {
         guard let t = transfer(call), let raw = call.getArray("actions") else { return call.reject("Unknown transfer.") }
@@ -547,6 +571,7 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
             if let code = t.code { out["code"] = code }
             out["problems"] = t.problems.keys.sorted().map { ["index": $0, "name": t.items[$0].name, "reason": t.problems[$0] ?? ""] as [String: Any] }
             out["skippedCount"] = t.skipped.count
+            out["staged"] = t.staged
             return out
         }
         call.resolve(out)
@@ -578,6 +603,13 @@ final class Vault: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
         var request = URLRequest(url: base.appendingPathComponent("/v1/backup/chunk"))
         request.httpMethod = "POST"
         for (k, v) in ["X-Transfer-Id": id, "X-Transfer-Token": token, "X-File-Index": String(index), "X-Offset": String(offset), "X-Sha256": SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), "Content-Type": "application/octet-stream"] { request.setValue(v, forHTTPHeaderField: k) }
+        request.httpBody = data
+        _ = try await send(request)
+    }
+
+    func speedChunk(_ token: String, _ data: Data) async throws {
+        var request = URLRequest(url: base.appendingPathComponent("/v1/speedtest/chunk"))
+        request.httpMethod = "POST"; request.setValue(token, forHTTPHeaderField: "X-Speedtest-Token"); request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         request.httpBody = data
         _ = try await send(request)
     }

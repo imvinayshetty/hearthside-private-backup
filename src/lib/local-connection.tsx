@@ -8,7 +8,10 @@ export const sessionSchema = identity.extend({ connected: z.literal(true) });
 export const catalogSchema = z.object({ backups: z.array(z.object({ name: z.string(), kind: z.enum(["Full", "Custom"]), date: z.string(), files: z.number().nonnegative(), bytes: z.number().nonnegative(), complete: z.boolean() })) });
 export const pickSchema = z.object({ items: z.array(z.object({ name: z.string(), path: z.string(), bytes: z.number().nonnegative() })) });
 export const startSchema = z.object({ transferId: z.string().min(1) });
-export const transferSchema = z.object({ state: z.enum(["running", "waiting", "review", "complete", "failed"]), sentBytes: z.number().nonnegative(), totalBytes: z.number().nonnegative(), bytesPerSecond: z.number().nonnegative().optional(), problems: z.array(z.object({ index: z.number().int().nonnegative(), name: z.string(), reason: z.string() })).default([]), skippedCount: z.number().int().nonnegative().default(0), reason: z.string().optional(), code: z.string().optional() });
+export const transferSchema = z.object({ state: z.enum(["running", "waiting", "review", "complete", "failed"]), sentBytes: z.number().nonnegative(), totalBytes: z.number().nonnegative(), bytesPerSecond: z.number().nonnegative().optional(), problems: z.array(z.object({ index: z.number().int().nonnegative(), name: z.string(), reason: z.string() })).default([]), skippedCount: z.number().int().nonnegative().default(0), reason: z.string().optional(), code: z.string().optional(), staged: z.boolean().optional() });
+/** Wi-Fi speed, and how fast the Vault's drive and its staging folder write (bytes per second). */
+export const speedTestSchema = z.object({ networkBytesPerSecond: z.number().nonnegative(), driveBytesPerSecond: z.number().nonnegative().optional(), stagingBytesPerSecond: z.number().nonnegative().optional(), staging: z.boolean().default(false) });
+export type SpeedTest = z.infer<typeof speedTestSchema>;
 export const statusSchema = z.object({ connected: z.boolean(), driveName: z.string(), freeBytes: z.number().nonnegative().optional(), totalBytes: z.number().nonnegative().optional() });
 export type DriveStatus = z.infer<typeof statusSchema>;
 export const compareSchema = z.discriminatedUnion("found", [z.object({ found: z.literal(false) }), z.object({ found: z.literal(true), name: z.string(), date: z.string(), files: z.number().nonnegative(), bytes: z.number().nonnegative(), changed: z.array(z.string()), changedCount: z.number().nonnegative(), changedBytes: z.number().nonnegative(), unchangedCount: z.number().nonnegative() })]);
@@ -32,6 +35,7 @@ export interface NativeVault {
   resolveProblems(input: { transferId: string; actions: { index: number; action: "retry" | "rename" | "skip"; name?: string }[] }): Promise<unknown>;
   cancelBackup(input: { transferId: string }): Promise<unknown>;
   vaultStatus(input?: { address: string; fingerprint: string }): Promise<unknown>;
+  speedTest(): Promise<unknown>;
   transferStatus(transferId: string): Promise<unknown>;
   disconnect(): Promise<void>;
   savedVault(): Promise<{ address?: string; fingerprint?: string }>;
