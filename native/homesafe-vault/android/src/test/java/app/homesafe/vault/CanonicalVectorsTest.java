@@ -22,7 +22,7 @@ public class CanonicalVectorsTest {
         return new JSONObject(new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8));
     }
 
-    private static Map<String, Object> flat(JSONObject o) {
+    private static Map<String, Object> flat(JSONObject o) throws Exception {
         Map<String, Object> out = new TreeMap<>();
         for (Iterator<String> it = o.keys(); it.hasNext();) { String k = it.next(); Object v = o.get(k); out.put(k, v instanceof String ? v : ((Number) v).longValue()); }
         return out;
