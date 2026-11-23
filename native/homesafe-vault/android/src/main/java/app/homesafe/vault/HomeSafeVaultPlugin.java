@@ -60,6 +60,7 @@ import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
@@ -79,10 +80,20 @@ import org.json.JSONObject;
 public class HomeSafeVaultPlugin extends Plugin {
     private static final int CHUNK = 4 * 1024 * 1024;
     static final int MANIFEST_PAGE = 5000;
+    /** How long a backup keeps trying to reach the Vault again after Wi-Fi drops (the Vault keeps the transfer for 20 minutes). */
+    static final long RESUME_WINDOW_MS = 15 * 60 * 1000L;
     private static final String PREFS = "homesafe_vault", WRAP = "homesafe_vault_wrap";
 
-    private static final class Item { final String name; final long bytes; final Uri uri; Item(String n, long b, Uri u) { name = n; bytes = b; uri = u; } }
-    private static final class Transfer { volatile String state = "running"; volatile long sent = 0; volatile long total = 0; volatile String reason; volatile String code; }
+    private static final class Item { String name; long bytes; final Uri uri; long modified; Item(String n, long b, Uri u, long m) { name = n; bytes = b; uri = u; modified = m; } }
+    private static final class Transfer { volatile String state = "running"; volatile long sent = 0; volatile long total = 0; volatile String reason; volatile String code; long pollAt = 0, pollSent = 0; double speed = 0;
+        /** Files that could not be copied and wait for the owner's decision (index -> reason), files already stored, and files the owner chose to skip. */
+        final Map<Integer, String> problems = java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>());
+        final Set<Integer> done = java.util.Collections.synchronizedSet(new HashSet<>()), skipped = java.util.Collections.synchronizedSet(new HashSet<>());
+        final java.util.concurrent.BlockingQueue<JSONArray> decisions = new java.util.concurrent.LinkedBlockingQueue<>();
+        volatile boolean cancel; List<Item> items; }
+    /** One file could not be read or changed while it was being copied. The backup carries on with the next file. */
+    static final class FileProblem extends Exception { FileProblem(String m) { super(m); } }
+    private interface Step { void go(int index, long offset) throws Exception; }
     private static final class Pending { String address, pin, deviceId, challenge, profile, phone; }
     /** Carries the Vault's machine-readable error code (code_expired, phone_revoked, ...) to the screens. */
     static final class VaultException extends Exception { final String code; VaultException(String m, String c) { super(m); code = c; } }
@@ -91,6 +102,9 @@ public class HomeSafeVaultPlugin extends Plugin {
     private final Map<String, Item> picked = new HashMap<>();
     private final Map<String, Transfer> transfers = new HashMap<>();
     private final ExecutorService io = Executors.newSingleThreadExecutor();
+    /** Reads the next chunk from storage while the previous one is on the network. */
+    private final ExecutorService readAhead = Executors.newSingleThreadExecutor();
+    private SSLSocketFactory cachedFactory; private String cachedPin;
     private Pending pending;
     private volatile boolean pickingFolder;
 
@@ -310,12 +324,12 @@ public class HomeSafeVaultPlugin extends Plugin {
                 Set<String> seen = new HashSet<>();
                 for (Uri base : new Uri[] { MediaStore.Images.Media.EXTERNAL_CONTENT_URI, MediaStore.Video.Media.EXTERNAL_CONTENT_URI }) {
                     String[] cols = Build.VERSION.SDK_INT >= 29
-                        ? new String[] { MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.RELATIVE_PATH }
-                        : new String[] { MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.SIZE };
+                        ? new String[] { MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.RELATIVE_PATH }
+                        : new String[] { MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED };
                     try (Cursor c = getContext().getContentResolver().query(base, cols, null, null, null)) {
                         while (c != null && c.moveToNext()) {
-                            String folder = cols.length > 3 && c.getString(3) != null ? c.getString(3) : "Media/";
-                            add(items, seen, folder + safe(c.getString(1)), c.getLong(2), ContentUris.withAppendedId(base, c.getLong(0)));
+                            String folder = cols.length > 4 && c.getString(4) != null ? c.getString(4) : "Media/";
+                            add(items, seen, folder + safe(c.getString(1)), c.getLong(2), ContentUris.withAppendedId(base, c.getLong(0)), Math.max(0, c.getLong(3)));
                         }
                     }
                 }
@@ -350,7 +364,7 @@ public class HomeSafeVaultPlugin extends Plugin {
         for (DocumentFile f : dir.listFiles()) {
             String name = prefix + "/" + safe(f.getName());
             if (f.isDirectory()) walk(items, seen, f, name);
-            else if (f.isFile()) add(items, seen, name, f.length(), f.getUri());
+            else if (f.isFile()) add(items, seen, name, f.length(), f.getUri(), Math.max(0, f.lastModified() / 1000));
         }
     }
 
@@ -359,10 +373,10 @@ public class HomeSafeVaultPlugin extends Plugin {
         try (Cursor c = getContext().getContentResolver().query(uri, new String[] { OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE }, null, null, null)) {
             if (c != null && c.moveToFirst()) { name = c.getString(0); size = c.isNull(1) ? 0 : c.getLong(1); }
         }
-        add(items, seen, safe(name), size, uri);
+        add(items, seen, safe(name), size, uri, 0);
     }
 
-    private void add(JSArray items, Set<String> seen, String name, long bytes, Uri uri) {
+    private void add(JSArray items, Set<String> seen, String name, long bytes, Uri uri, long modified) {
         String candidate = name.replaceAll("/+$", "");
         int n = 2;
         while (seen.contains(candidate.toLowerCase())) {
@@ -372,7 +386,7 @@ public class HomeSafeVaultPlugin extends Plugin {
         }
         seen.add(candidate.toLowerCase());
         String id = UUID.randomUUID().toString();
-        picked.put(id, new Item(candidate, bytes, uri));
+        picked.put(id, new Item(candidate, bytes, uri, modified));
         items.put(new JSObject().put("name", candidate).put("path", id).put("bytes", bytes));
     }
 
@@ -388,7 +402,7 @@ public class HomeSafeVaultPlugin extends Plugin {
     public void startBackup(PluginCall call) {
         io.execute(() -> {
             try {
-                String name = call.getString("name"), kind = call.getString("kind");
+                String name = call.getString("name"), kind = call.getString("kind"), basedOn = call.getString("basedOn");
                 JSONArray paths = call.getArray("paths");
                 List<Item> items = new ArrayList<>();
                 for (int i = 0; i < paths.length(); i++) {
@@ -398,7 +412,7 @@ public class HomeSafeVaultPlugin extends Plugin {
                 }
                 if (items.isEmpty()) throw new Exception("Choose your files again.");
                 long total = 0; JSONArray listing = new JSONArray();
-                for (Item it : items) { total += it.bytes; listing.put(new JSONObject().put("path", it.name).put("bytes", it.bytes)); }
+                for (Item it : items) { total += it.bytes; JSONObject row = new JSONObject().put("path", it.name).put("bytes", it.bytes); if (it.modified > 0) row.put("modified", it.modified); listing.put(row); }
                 JSONObject saved = pairing();
                 String address = saved.getString("address"), pin = saved.getString("pin"), deviceId = saved.getString("deviceId"), challenge = challenge(saved);
                 Map<String, Object> message = new TreeMap<>();
@@ -408,6 +422,7 @@ public class HomeSafeVaultPlugin extends Plugin {
                 body.put("deviceId", deviceId); body.put("challenge", challenge); body.put("signature", sign(signingKey(), message));
                 boolean paged = listing.length() > MANIFEST_PAGE;
                 body.put("name", name); body.put("kind", kind); body.put("files", paged ? new JSONArray() : listing);
+                if (basedOn != null && !basedOn.isEmpty()) body.put("basedOn", basedOn);
                 if (paged) { body.put("fileCount", listing.length()); body.put("bytes", total); }
                 JSONObject started = post(address, pin, "/v1/backup/start", body);
                 String id = started.getString("transferId"), token = started.getString("token");
@@ -419,7 +434,7 @@ public class HomeSafeVaultPlugin extends Plugin {
                     pageBody.put("transferId", id); pageBody.put("token", token); pageBody.put("offset", offset); pageBody.put("files", page);
                     post(address, pin, "/v1/backup/files", pageBody);
                 }
-                Transfer t = new Transfer(); t.total = total;
+                Transfer t = new Transfer(); t.total = total; t.items = items;
                 synchronized (transfers) { transfers.put(id, t); }
                 call.resolve(new JSObject().put("transferId", id));
                 keepAwake(true);
@@ -430,30 +445,143 @@ public class HomeSafeVaultPlugin extends Plugin {
 
     private void run(String address, String pin, String id, String token, List<Item> items, Transfer t) {
         try {
-            ContentResolver resolver = getContext().getContentResolver();
-            byte[] buffer = new byte[CHUNK];
-            for (int index = 0; index < items.size(); index++) {
-                Item item = items.get(index);
-                long offset = 0;
-                try (InputStream in = resolver.openInputStream(item.uri)) {
-                    if (in == null) throw new Exception(item.name + " is no longer on this phone.");
-                    do {
-                        int len = 0, r;
-                        while (len < CHUNK && (r = in.read(buffer, len, CHUNK - len)) > 0) len += r;
-                        if (offset + len > item.bytes) throw new Exception(item.name + " changed while backing up. Choose it again.");
-                        byte[] chunk = java.util.Arrays.copyOf(buffer, len);
-                        chunk(address, pin, id, token, index, offset, chunk);
-                        offset += len; t.sent += len;
-                        if (len == 0) break;
-                    } while (offset < item.bytes);
+            // Pass 1: every file. A file that cannot be copied is parked and the next one starts.
+            retrying(address, pin, id, token, t, (i, o) -> copyFrom(address, pin, id, token, items, t, i, o));
+            // Review: the owner decides what happens to parked files (retry, rename, skip) before the backup is finished.
+            while (!t.problems.isEmpty()) {
+                t.state = "review"; t.reason = null;
+                JSONArray actions = null;
+                while (actions == null) {
+                    if (t.cancel) throw new VaultException("Backup cancelled.", "cancelled");
+                    actions = t.decisions.poll(30, java.util.concurrent.TimeUnit.SECONDS);
+                    if (actions == null) { try { Map<String, Object> hb = new TreeMap<>(); hb.put("transferId", id); hb.put("token", token); post(address, pin, "/v1/backup/resume", hb); } catch (VaultException ignore) { /* keep waiting */ } }
                 }
-                if (offset != item.bytes) throw new Exception(item.name + " changed while backing up. Choose it again.");
+                if (t.cancel) throw new VaultException("Backup cancelled.", "cancelled");
+                t.state = "running";
+                applyDecisions(address, pin, id, token, items, t, actions);
+                retrying(address, pin, id, token, t, (i, o) -> copyFrom(address, pin, id, token, items, t, 0, 0));
             }
-            Map<String, Object> body = new TreeMap<>();
-            body.put("transferId", id); body.put("token", token);
-            post(address, pin, "/v1/backup/finish", body);
-            t.state = "complete";
-        } catch (Exception e) { t.reason = message(e); if (e instanceof VaultException) t.code = ((VaultException) e).code; t.state = "failed"; }
+            retrying(address, pin, id, token, t, (i, o) -> { Map<String, Object> body = new TreeMap<>(); body.put("transferId", id); body.put("token", token); post(address, pin, "/v1/backup/finish", body); });
+            t.state = "complete"; t.reason = null;
+        } catch (Exception e) {
+            t.reason = message(e); if (e instanceof VaultException) t.code = ((VaultException) e).code; t.state = "failed";
+            // Tell the Vault right away, so it stops instead of waiting for its idle timeout.
+            try { Map<String, Object> body = new TreeMap<>(); body.put("transferId", id); body.put("token", token); post(address, pin, "/v1/backup/abort", body); } catch (Exception ignore) { /* Vault unreachable: it times out on its own */ }
+        }
+    }
+
+    /** Runs a step; when Wi-Fi drops (or a chunk is rejected) asks the Vault where it stopped and carries on from there. */
+    private void retrying(String address, String pin, String id, String token, Transfer t, Step step) throws Exception {
+        int index = 0; long offset = 0, lastSent = -1; int stalls = 0;
+        for (;;) {
+            try { if (t.cancel) throw new VaultException("Backup cancelled.", "cancelled"); step.go(index, offset); return; }
+            catch (VaultException e) {
+                boolean network = "unreachable".equals(e.code);
+                if (!network && !"invalid_request".equals(e.code)) throw e;
+                if (!network && (t.sent <= lastSent ? ++stalls : (stalls = 0)) >= 3) throw e;
+                lastSent = t.sent;
+                long since = System.currentTimeMillis(), wait = 2000;
+                for (;;) {
+                    if (t.cancel) throw new VaultException("Backup cancelled.", "cancelled");
+                    t.state = "waiting"; t.reason = network ? "Waiting for your Vault to come back on Wi-Fi\u2026" : "Retrying\u2026";
+                    if (System.currentTimeMillis() - since > RESUME_WINDOW_MS) throw new VaultException("Could not reach your Vault for 15 minutes. Check that it is on and on the same Wi-Fi, then start again.", "unreachable");
+                    try { Thread.sleep(wait); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); throw e; }
+                    wait = Math.min(wait * 2, 30000);
+                    try {
+                        Map<String, Object> body = new TreeMap<>(); body.put("transferId", id); body.put("token", token);
+                        JSONObject r = post(address, pin, "/v1/backup/resume", body);
+                        index = r.getInt("nextIndex"); offset = r.getLong("nextOffset"); t.sent = r.getLong("receivedBytes");
+                        t.state = "running"; t.reason = null;
+                        break;
+                    } catch (VaultException again) { if (!"unreachable".equals(again.code)) throw again; }
+                }
+            }
+        }
+    }
+
+    private void applyDecisions(String address, String pin, String id, String token, List<Item> items, Transfer t, JSONArray actions) throws Exception {
+        for (int n = 0; n < actions.length(); n++) {
+            JSONObject a = actions.getJSONObject(n);
+            int index = a.getInt("index"); String action = a.getString("action");
+            if (index < 0 || index >= items.size() || !t.problems.containsKey(index)) continue;
+            Item item = items.get(index);
+            if ("skip".equals(action)) { t.problems.remove(index); t.skipped.add(index); continue; }
+            String oldName = item.name; long oldBytes = item.bytes, oldModified = item.modified;
+            try {
+                if ("rename".equals(action)) {
+                    String[] parts = a.optString("name", item.name).split("/"); StringBuilder sb = new StringBuilder();
+                    for (String part : parts) { if (part.trim().isEmpty()) continue; if (sb.length() > 0) sb.append('/'); sb.append(safe(part)); }
+                    String candidate = sb.toString();
+                    if (candidate.isEmpty()) throw new FileProblem("Type a name for this file.");
+                    for (int i = 0; i < items.size(); i++) if (i != index && items.get(i).name.equalsIgnoreCase(candidate)) throw new FileProblem("Another file in this backup already has that name.");
+                    item.name = candidate;
+                }
+                item.bytes = currentSize(item.uri); item.modified = System.currentTimeMillis() / 1000;
+                Map<String, Object> body = new TreeMap<>();
+                body.put("transferId", id); body.put("token", token); body.put("index", index); body.put("path", item.name); body.put("bytes", item.bytes); body.put("modified", item.modified);
+                JSONObject r = post(address, pin, "/v1/backup/replace", body);
+                t.sent = r.getLong("receivedBytes"); t.total = r.getLong("totalBytes");
+                t.problems.remove(index);
+            } catch (FileProblem | VaultException e) {
+                item.name = oldName; item.bytes = oldBytes; item.modified = oldModified;
+                boolean network = e instanceof VaultException && "unreachable".equals(((VaultException) e).code);
+                t.problems.put(index, network ? "Could not reach your Vault. Try again." : e instanceof VaultException ? "The Vault did not accept that name." : e.getMessage());
+            }
+        }
+    }
+
+    private long currentSize(Uri uri) throws FileProblem {
+        try (Cursor c = getContext().getContentResolver().query(uri, new String[] { OpenableColumns.SIZE }, null, null, null)) {
+            if (c != null && c.moveToFirst() && !c.isNull(0)) return c.getLong(0);
+        } catch (RuntimeException ignore) { /* handled below */ }
+        throw new FileProblem("This file is no longer on the phone.");
+    }
+
+    private void reportProblem(String address, String pin, String id, String token, int index, Item item, Transfer t, String why) throws Exception {
+        Map<String, Object> body = new TreeMap<>();
+        body.put("transferId", id); body.put("token", token); body.put("index", index); body.put("reason", why.length() > 200 ? why.substring(0, 200) : why);
+        JSONObject r = post(address, pin, "/v1/backup/problem", body);
+        t.sent = r.getLong("receivedBytes"); t.problems.put(index, why);
+    }
+
+    private static int fill(InputStream in, byte[] buf) throws java.io.IOException { int len = 0, r; while (len < buf.length && (r = in.read(buf, len, buf.length - len)) > 0) len += r; return len; }
+
+    /** Sends every file that is not yet stored, parked or skipped, starting at (startIndex, startOffset). Does not finish the backup. */
+    private void copyFrom(String address, String pin, String id, String token, List<Item> items, Transfer t, int startIndex, long startOffset) throws Exception {
+        for (int index = startIndex; index < items.size(); index++) {
+            if (t.cancel) throw new VaultException("Backup cancelled.", "cancelled");
+            if (t.done.contains(index) || t.skipped.contains(index) || t.problems.containsKey(index)) continue;
+            Item item = items.get(index);
+            try { sendFile(address, pin, id, token, item, index, index == startIndex ? startOffset : 0, t); t.done.add(index); }
+            catch (FileProblem p) { reportProblem(address, pin, id, token, index, item, t, item.name + ": " + p.getMessage()); }
+        }
+    }
+
+    private void sendFile(String address, String pin, String id, String token, Item item, int index, long startOffset, Transfer t) throws Exception {
+        ContentResolver resolver = getContext().getContentResolver();
+        byte[][] bufs = { new byte[CHUNK], new byte[CHUNK] };
+        long offset = startOffset;
+        try (InputStream in = resolver.openInputStream(item.uri)) {
+            if (in == null) throw new FileProblem("This file is no longer on the phone.");
+            long skipped = 0;
+            while (skipped < offset) { long n = in.skip(offset - skipped); if (n <= 0) { if (in.read() < 0) break; n = 1; } skipped += n; }
+            if (skipped != offset) throw new FileProblem("The file changed while backing up.");
+            int cur = 0, len = fill(in, bufs[0]);
+            for (;;) {
+                if (offset + len > item.bytes) throw new FileProblem("The file changed while backing up.");
+                final int other = 1 - cur; final InputStream src = in;
+                java.util.concurrent.Future<Integer> next = offset + len < item.bytes ? readAhead.submit(() -> fill(src, bufs[other])) : null;
+                try {
+                    chunk(address, pin, id, token, index, offset, java.util.Arrays.copyOf(bufs[cur], len));
+                    offset += len; t.sent += len;
+                    if (len == 0 || next == null) break;
+                    len = next.get(); cur = other;
+                } catch (java.util.concurrent.ExecutionException ee) { throw new FileProblem("The file could not be read.");
+                } finally { if (next != null && !next.isDone()) next.cancel(true); }
+            }
+        } catch (java.io.FileNotFoundException | SecurityException e) { throw new FileProblem("This file is no longer on the phone.");
+        } catch (java.io.IOException e) { throw new FileProblem("The file could not be read."); }
+        if (offset != item.bytes) throw new FileProblem("The file changed while backing up.");
     }
 
     private void keepAwake(boolean on) {
@@ -463,13 +591,96 @@ public class HomeSafeVaultPlugin extends Plugin {
         });
     }
 
+    /**
+     * Finds this phone's latest complete Full backup on the Vault and works out which of the given items are new or changed since then.
+     * Returns { found:false } when there is no earlier Full backup. Items are compared by path and size, and by modified time when both sides have it.
+     */
+    @PluginMethod
+    public void compareWithLastFull(PluginCall call) {
+        io.execute(() -> {
+            try {
+                JSONArray paths = call.getArray("paths");
+                JSONObject saved = pairing();
+                String address = saved.getString("address"), pin = saved.getString("pin"), deviceId = saved.getString("deviceId"), challenge = challenge(saved);
+                Map<String, Object> message = new TreeMap<>();
+                message.put("deviceId", deviceId); message.put("challenge", challenge); message.put("action", "baseline");
+                Map<String, Object> body = new TreeMap<>();
+                body.put("deviceId", deviceId); body.put("challenge", challenge); body.put("signature", sign(signingKey(), message));
+                JSONObject first = post(address, pin, "/v1/backup/baseline", body);
+                if (!first.optBoolean("found", false)) { call.resolve(new JSObject().put("found", false)); return; }
+                String token = first.getString("token");
+                Map<String, long[]> base = new HashMap<>(); // path -> { bytes, modified or -1 }
+                JSONObject page = first;
+                for (;;) {
+                    JSONArray entries = page.getJSONArray("entries");
+                    for (int i = 0; i < entries.length(); i++) { JSONObject e = entries.getJSONObject(i); base.put(e.getString("path"), new long[] { e.getLong("bytes"), e.has("modified") ? e.getLong("modified") : -1 }); }
+                    if (page.isNull("next")) break;
+                    Map<String, Object> more = new TreeMap<>();
+                    more.put("deviceId", deviceId); more.put("token", token); more.put("offset", page.getLong("next"));
+                    page = post(address, pin, "/v1/backup/baseline", more);
+                }
+                JSArray changed = new JSArray(); long changedBytes = 0; int unchanged = 0;
+                for (int i = 0; i < paths.length(); i++) {
+                    String id = paths.getString(i); Item it = picked.get(id);
+                    if (it == null) throw new Exception("Choose your files again.");
+                    long[] b = base.get(it.name);
+                    boolean same = b != null && b[0] == it.bytes && (b[1] < 0 || it.modified <= 0 || it.modified <= b[1]);
+                    if (same) unchanged++; else { changed.put(id); changedBytes += it.bytes; }
+                }
+                call.resolve(new JSObject().put("found", true).put("name", first.getString("name")).put("date", first.getString("date"))
+                    .put("files", first.getLong("files")).put("bytes", first.getLong("bytes"))
+                    .put("changed", changed).put("changedCount", changed.length()).put("changedBytes", changedBytes).put("unchangedCount", unchanged));
+            } catch (Exception e) { fail(call, e); }
+        });
+    }
+
+    /** Which drive the Vault saves to and its free space. With an address and fingerprint: a discovered Vault; without: the paired one. */
+    @PluginMethod
+    public void vaultStatus(PluginCall call) {
+        io.execute(() -> {
+            try {
+                String address = call.getString("address"), pin;
+                if (address == null) { JSONObject saved = pairing(); address = saved.getString("address"); pin = saved.getString("pin"); }
+                else pin = clean(call.getString("fingerprint"));
+                call.resolve(JSObject.fromJSONObject(post(address, pin, "/v1/status", new TreeMap<>())));
+            } catch (Exception e) { fail(call, e); }
+        });
+    }
+
+    /** Decisions for files that could not be copied: [{ index, action: "retry" | "rename" | "skip", name? }]. */
+    @PluginMethod
+    public void resolveProblems(PluginCall call) {
+        Transfer t;
+        synchronized (transfers) { t = transfers.get(call.getString("transferId")); }
+        if (t == null || call.getArray("actions") == null) { call.reject("Unknown transfer."); return; }
+        t.decisions.offer(call.getArray("actions"));
+        call.resolve();
+    }
+
+    /** Stops the backup now, on the phone and on the Vault. */
+    @PluginMethod
+    public void cancelBackup(PluginCall call) {
+        Transfer t;
+        synchronized (transfers) { t = transfers.get(call.getString("transferId")); }
+        if (t == null) { call.reject("Unknown transfer."); return; }
+        t.cancel = true; t.decisions.offer(new JSONArray());
+        call.resolve();
+    }
+
     @PluginMethod
     public void transferStatus(PluginCall call) {
         Transfer t;
         synchronized (transfers) { t = transfers.get(call.getString("transferId")); }
         if (t == null) { call.reject("Unknown transfer."); return; }
-        JSObject out = new JSObject().put("state", t.state).put("sentBytes", t.sent).put("totalBytes", t.total);
+        long now = android.os.SystemClock.elapsedRealtime(), sent = t.sent;
+        if (t.pollAt > 0 && now > t.pollAt) { double inst = (sent - t.pollSent) * 1000.0 / (now - t.pollAt); t.speed = t.speed == 0 ? inst : 0.6 * t.speed + 0.4 * inst; }
+        t.pollAt = now; t.pollSent = sent;
+        if (!"running".equals(t.state)) t.speed = 0;
+        JSObject out = new JSObject().put("state", t.state).put("sentBytes", sent).put("totalBytes", t.total).put("bytesPerSecond", Math.round(Math.max(0, t.speed)));
         if (t.reason != null) out.put("reason", t.reason);
+        JSArray review = new JSArray();
+        synchronized (t.problems) { for (Map.Entry<Integer, String> e : t.problems.entrySet()) review.put(new JSObject().put("index", e.getKey()).put("name", t.items.get(e.getKey()).name).put("reason", e.getValue())); }
+        out.put("problems", review).put("skippedCount", t.skipped.size());
         if (t.code != null) out.put("code", t.code);
         call.resolve(out);
     }
@@ -498,10 +709,16 @@ public class HomeSafeVaultPlugin extends Plugin {
             }
             public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
         };
-        SSLContext tls = SSLContext.getInstance("TLS");
-        tls.init(null, new TrustManager[] { pinned }, new SecureRandom());
+        // One TLS context per pinned Vault, so connections can be reused instead of a full handshake for every 4 MiB chunk.
+        synchronized (this) {
+            if (cachedFactory == null || !pin.equals(cachedPin)) {
+                SSLContext tls = SSLContext.getInstance("TLS");
+                tls.init(null, new TrustManager[] { pinned }, new SecureRandom());
+                cachedFactory = tls.getSocketFactory(); cachedPin = pin;
+            }
+        }
         HttpsURLConnection c = (HttpsURLConnection) new URL(address + path).openConnection();
-        c.setSSLSocketFactory(tls.getSocketFactory());
+        c.setSSLSocketFactory(cachedFactory);
         c.setHostnameVerifier((host, session) -> true); // Identity is the pinned certificate, not a hostname.
         c.setInstanceFollowRedirects(false);
         c.setUseCaches(false);
@@ -522,10 +739,13 @@ public class HomeSafeVaultPlugin extends Plugin {
             if (status < 200 || status >= 300) throw new VaultException(json.optString("error", "The Vault rejected the request."), json.optString("code", null));
             return json;
         } catch (javax.net.ssl.SSLException e) {
+            c.disconnect();
             throw new VaultException("Your Vault's certificate does not match. Pair again only if you changed it on purpose.", "certificate_mismatch");
         } catch (java.io.IOException e) {
+            c.disconnect();
             throw new VaultException("Lost contact with your Vault. Check Wi-Fi and that the Vault is running.", "unreachable");
-        } finally { c.disconnect(); }
+        } catch (RuntimeException | Error e) { c.disconnect(); throw e;
+        }
     }
 
     private JSONObject post(String address, String pin, String path, Map<String, Object> body) throws Exception {
@@ -548,22 +768,9 @@ public class HomeSafeVaultPlugin extends Plugin {
     // ---------- Keys and secure storage ----------
 
     /** Matches the Node Vault's canonical JSON (sorted keys, no whitespace, JSON.stringify escaping) for flat objects. Checked against protocol/test-vectors.json. */
-    /** Key order the Vault uses: Unicode code points (UTF-8 byte order), not Java's default UTF-16 order. */
-    static final java.util.Comparator<String> CODE_POINT_ORDER = (a, b) -> {
-        int i = 0, j = 0;
-        while (i < a.length() && j < b.length()) {
-            int x = a.codePointAt(i), y = b.codePointAt(j);
-            if (x != y) return Integer.compare(x, y);
-            i += Character.charCount(x); j += Character.charCount(y);
-        }
-        return Integer.compare(a.length() - i, b.length() - j);
-    };
-
     static String canonical(Map<String, Object> value) {
         StringBuilder out = new StringBuilder("{");
-        Map<String, Object> sorted = new TreeMap<>(CODE_POINT_ORDER);
-        sorted.putAll(value);
-        Iterator<Map.Entry<String, Object>> it = sorted.entrySet().iterator();
+        Iterator<Map.Entry<String, Object>> it = new TreeMap<>(value).entrySet().iterator();
         while (it.hasNext()) {
             Map.Entry<String, Object> e = it.next();
             out.append(quote(e.getKey())).append(':');

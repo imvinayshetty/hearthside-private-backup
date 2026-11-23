@@ -11,7 +11,13 @@ type Plugin = {
   confirm(i: { requestId: string }): Promise<unknown>;
   catalog(): Promise<unknown>;
   pick(i: { kind: "Full" | "Custom" }): Promise<unknown>;
-  startBackup(i: { name: string; kind: "Full" | "Custom"; paths: string[] }): Promise<unknown>;
+  startBackup(i: { name: string; kind: "Full" | "Custom"; paths: string[]; basedOn?: string }): Promise<unknown>;
+  /** Android only for now: which of these items are new or changed since this phone's last Full backup. */
+  compareWithLastFull(i: { paths: string[] }): Promise<unknown>;
+  resolveProblems(i: { transferId: string; actions: { index: number; action: "retry" | "rename" | "skip"; name?: string }[] }): Promise<unknown>;
+  cancelBackup(i: { transferId: string }): Promise<unknown>;
+  /** The drive a Vault saves to. No argument: the paired Vault. Android only for now. */
+  vaultStatus(i?: { address: string; fingerprint: string }): Promise<unknown>;
   transferStatus(i: { transferId: string }): Promise<unknown>;
   disconnect(): Promise<void>;
   savedVault(): Promise<{ address?: string; fingerprint?: string }>;
@@ -47,6 +53,10 @@ export function installNativeVault(): void {
     catalog: () => vault.catalog(),
     pick: (i) => vault.pick(i),
     startBackup: (i) => vault.startBackup(i),
+    compareWithLastFull: (i) => vault.compareWithLastFull(i),
+    resolveProblems: (i) => vault.resolveProblems(i),
+    cancelBackup: (i) => vault.cancelBackup(i),
+    vaultStatus: (i) => vault.vaultStatus(i),
     transferStatus: (transferId) => vault.transferStatus({ transferId }),
     disconnect: () => vault.disconnect(),
     savedVault: () => vault.savedVault(),

@@ -3,10 +3,10 @@ import { useNavigate } from "@tanstack/react-router";
 import { ArrowRight, Mail } from "lucide-react";
 import { vaultEmail } from "@/lib/backup-rules";
 import { useLocalConnection } from "@/lib/local-connection";
-import { GhostButton, PrimaryButton } from "./ui";
+import { PrimaryButton } from "./ui";
 import { ConnectionShell, connectionInput } from "./ConnectionShell";
 
-export function Enrollment({ onDemo }: { onDemo: () => void }) {
+export function Enrollment() {
   const connection = useLocalConnection();
   const [email, setEmail] = useState(connection.email);
   const [error, setError] = useState("");
@@ -18,6 +18,5 @@ export function Enrollment({ onDemo }: { onDemo: () => void }) {
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       <PrimaryButton type="submit">Continue<ArrowRight size={18} /></PrimaryButton>
     </form>
-    <GhostButton onClick={onDemo} className="mt-8 h-10 border-none bg-transparent text-sm text-slate">Open demo</GhostButton>
   </ConnectionShell>;
 }

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Wifi, QrCode, Keyboard, ArrowRight, Loader2, ShieldCheck, HardDrive, Timer } from "lucide-react";
 import { ConnectionShell, connectionInput } from "@/components/homesafe/ConnectionShell";
 import { GhostButton, PrimaryButton } from "@/components/homesafe/ui";
+import { DriveCard, useDriveStatus } from "@/components/homesafe/DriveCard";
 import { localVaultAddress, pairingCode } from "@/lib/backup-rules";
 import { nativeVault, offerSchema, sessionSchema, useLocalConnection, type PairOffer } from "@/lib/local-connection";
 import { CODE_HINT, confirmDeadline, fingerprintPin, secondsLeft, vaultProblem, type DiscoveredVault, type PairingQr } from "@/lib/vault-protocol";
@@ -95,12 +96,15 @@ function PairPage() {
     else void begin({ address, fingerprint, code });
   }
 
+  const shown = method?.kind === "found" ? method.vault : vaults[0] ?? null;
+  const drive = useDriveStatus(shown ? { address: shown.address, fingerprint: shown.fingerprint } : null);
   if (!connection.email) return <ConnectionShell title="Login first" step={1}><Link to="/" className="mt-8 inline-block text-sagedeep underline">Go to Login</Link></ConnectionShell>;
   const codeField = <label className="block text-sm font-medium">Code shown on your Vault<input className={connectionInput + " text-center font-mono text-xl"} aria-label="Pairing code" inputMode="numeric" maxLength={6} autoComplete="one-time-code" pattern="[0-9]{6}" value={code} onChange={e => setCode(e.target.value.replace(/\D/g, ""))} placeholder="000000" required /></label>;
   const submitButton = <PrimaryButton type="submit" disabled={busy || code.length !== 6}>{busy ? <Loader2 size={18} className="animate-spin motion-reduce:animate-none" /> : <ArrowRight size={18} />}Pair with Vault</PrimaryButton>;
 
   return <ConnectionShell title={offer ? "Confirm your phone" : "Connect your Vault"} step={2} back="/">
     <div role="status" className="my-8 flex items-center gap-3 border-y border-ink/10 py-5"><Wifi size={24} className="text-sagedeep" /><div><p className="text-sm font-medium">{wifi === true ? (network ? <>Connected to <span className="break-all">{network}</span></> : "Wi-Fi connected") : wifi === false ? "Wi-Fi disconnected" : "Wi-Fi can't be checked here"}</p><p className="mt-1 text-xs text-slate">{wifi === true ? (searching ? "Looking for your Vault…" : vaults.length ? `${vaults.length === 1 ? "1 Vault" : `${vaults.length} Vaults`} found on this Wi-Fi` : "No Vault found yet — scan its QR code or enter it manually") : wifi === false ? "Connect to the same home Wi-Fi as your Vault." : "Open the HomeSafe app on your phone to check Wi-Fi."}</p></div></div>
+    {!offer && <DriveCard status={drive} />}
     {offer ? <div className="space-y-6">
       <ShieldCheck size={30} className="text-sagedeep" />
       <dl className="space-y-4"><div><dt className="text-xs text-slate">Profile</dt><dd className="mt-1 break-words font-medium">{offer.profile}</dd></div><div><dt className="text-xs text-slate">Phone or tablet</dt><dd className="mt-1 break-words font-medium">{offer.phone}</dd></div></dl>
