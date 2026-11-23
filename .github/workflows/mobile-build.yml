@@ -80,8 +80,13 @@ jobs:
         run: |
           if [ -n "$KEYSTORE_B64" ]; then
             mkdir -p ~/.android
-            echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
-            echo "Using the stored debug keystore."
+            # Tolerate pasted line breaks, spaces or quotes in the secret.
+            if printf '%s' "$KEYSTORE_B64" | tr -d ' \t\r\n"'"'"'' | base64 -d > ~/.android/debug.keystore 2>/dev/null && keytool -list -keystore ~/.android/debug.keystore -storepass android >/dev/null 2>&1; then
+              echo "Using the stored debug keystore."
+            else
+              rm -f ~/.android/debug.keystore
+              echo "::warning::ANDROID_DEBUG_KEYSTORE_B64 is not a valid base64 keystore with password 'android'. Building with a fresh key instead. Re-create the secret with: base64 -w0 debug.keystore"
+            fi
           else
             echo "::warning::No ANDROID_DEBUG_KEYSTORE_B64 secret. Every build is signed with a new key, so Android will refuse to update an installed copy: uninstall first (this removes the phone's pairing)."
           fi
@@ -153,6 +158,9 @@ jobs:
       - name: Create and sync the iOS project
         run: |
           [ -d ios ] || npx cap add ios
+          # The plugin needs iOS 15; Capacitor 7's template defaults to 14.
+          sed -i '' "s/platform :ios, '14.0'/platform :ios, '15.0'/" ios/App/Podfile
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' ios/App/App.xcodeproj/project.pbxproj
           npx cap sync ios
       - name: Compile for the iOS Simulator
         run: |
