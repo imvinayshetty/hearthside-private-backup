@@ -81,12 +81,22 @@ jobs:
         run: |
           if [ -n "$KEYSTORE_B64" ]; then
             mkdir -p ~/.android
-            # Tolerate pasted line breaks, spaces or quotes in the secret.
-            if printf '%s' "$KEYSTORE_B64" | tr -d ' \t\r\n"'"'"'' | base64 -d > ~/.android/debug.keystore 2>/dev/null && keytool -list -keystore ~/.android/debug.keystore -storepass android >/dev/null 2>&1; then
+            CLEAN="$(printf '%s' "$KEYSTORE_B64" | tr -d ' \t\r\n"'"'"'')"
+            echo "Secret length: ${#KEYSTORE_B64} chars (${#CLEAN} after cleaning)"
+            BAD="$(printf '%s' "$CLEAN" | tr -d 'A-Za-z0-9+/=' | wc -c | tr -d ' ')"
+            echo "Characters outside the base64 alphabet: $BAD"
+            OK=0
+            if printf '%s' "$CLEAN" | base64 -d > ~/.android/debug.keystore 2> /tmp/b64.err; then
+              echo "Decoded size: $(wc -c < ~/.android/debug.keystore) bytes"
+              if keytool -list -keystore ~/.android/debug.keystore -storepass android > /tmp/kt.out 2>&1; then OK=1; else echo "keytool said:"; head -5 /tmp/kt.out; fi
+            else
+              echo "base64 said:"; head -3 /tmp/b64.err
+            fi
+            if [ "$OK" = 1 ]; then
               echo "Using the stored debug keystore."
             else
               rm -f ~/.android/debug.keystore
-              echo "::warning::ANDROID_DEBUG_KEYSTORE_B64 is not a valid base64 keystore with password 'android'. Building with a fresh key instead. Re-create the secret with: base64 -w0 debug.keystore"
+              echo "::warning::ANDROID_DEBUG_KEYSTORE_B64 is not a valid base64 keystore with password 'android'. Building with a fresh key instead. See the lines above for why."
             fi
           else
             echo "::warning::No ANDROID_DEBUG_KEYSTORE_B64 secret. Every build is signed with a new key, so Android will refuse to update an installed copy: uninstall first (this removes the phone's pairing)."
