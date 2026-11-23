@@ -158,7 +158,10 @@ jobs:
       - run: npm run build:mobile
       - name: Create and sync the iOS project
         run: |
-          [ -d ios ] || npx cap add ios
+          # `cap add` runs pod install itself, which fails while the template still says iOS 14.
+          # Ignore that one failure, raise the target, then sync for real below.
+          if [ ! -d ios ]; then npx cap add ios || echo "cap add stopped at pod install (expected); fixing the target next"; fi
+          test -f ios/App/Podfile
           # Google ML Kit (QR scanner) needs iOS 15.5; Capacitor 7's template defaults to 14.
           sed -i '' "s/platform :ios, '14.0'/platform :ios, '15.5'/" ios/App/Podfile
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.5;/g' ios/App/App.xcodeproj/project.pbxproj
