@@ -93,6 +93,7 @@ export function NewBackup({ existing, onDone, onRepair, freeBytes }: { freeBytes
     try { await nativeVault().resolveProblems({ transferId, actions }); } catch (e) { setError(vaultProblem(e, "Could not send your choice.").message); }
   }
   async function cancel() {
+    if (!window.confirm("Cancel this backup? Files already copied stay on your Vault, and you can start again or sync changes later.")) return;
     try { await nativeVault().cancelBackup({ transferId }); } catch (e) { setError(vaultProblem(e, "Could not cancel.").message); }
   }
   const pct = transfer && transfer.totalBytes ? Math.min(100, Math.round((transfer.sentBytes / transfer.totalBytes) * 100)) : 0;
@@ -141,9 +142,9 @@ export function NewBackup({ existing, onDone, onRepair, freeBytes }: { freeBytes
         <p className="mt-2 text-slate">{pct}% · {mb(transfer.sentBytes)} of {mb(transfer.totalBytes)}{transfer.state === "running" && transfer.bytesPerSecond ? ` · ${(transfer.bytesPerSecond / 1048576).toFixed(1)} MB/s` : ""}</p>
         {transfer.problems.length > 0 && <p className="mt-1 text-warn">{transfer.problems.length} {transfer.problems.length === 1 ? "file" : "files"} could not be copied. The backup continues, and you can review {transfer.problems.length === 1 ? "it" : "them"} at the end.</p>}
         {transfer.state === "waiting" && <p className="mt-1 text-warn">{transfer.reason || "Waiting for your Vault…"} The backup continues where it stopped.</p>}</>}
-      {running && <GhostButton className="mt-3" onClick={() => void cancel()}>Stop backup</GhostButton>}
+      {running && <GhostButton className="mt-3" onClick={() => void cancel()}>Cancel backup</GhostButton>}
       {transfer.state === "complete" && <p className="text-sagedeep">Backup complete · {mb(transfer.sentBytes)} saved to your Vault.{transfer.skippedCount > 0 ? ` ${transfer.skippedCount} skipped ${transfer.skippedCount === 1 ? "file is" : "files are"} listed in the backup details.` : ""}</p>}
-      {transfer.state === "failed" && <p className="text-destructive">Backup failed: {transfer.reason || "The Vault stopped the transfer."}</p>}
+      {transfer.state === "failed" && <p className="text-destructive">{transfer.code === "cancelled" ? "Backup cancelled. Files already copied are safe on your Vault." : `Backup failed: ${transfer.reason || "The Vault stopped the transfer."}`}</p>}
     </div>}
     {error && <p role="alert" className="mt-4 text-sm text-destructive">{error}</p>}
   </section>;

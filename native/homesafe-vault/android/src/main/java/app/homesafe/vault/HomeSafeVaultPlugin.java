@@ -443,7 +443,17 @@ public class HomeSafeVaultPlugin extends Plugin {
         });
     }
 
+    /** Keeps Wi-Fi at full speed for the whole copy; with the screen off Android otherwise drops the radio into power-save and throughput collapses. */
     private void run(String address, String pin, String id, String token, List<Item> items, Transfer t) {
+        WifiManager.WifiLock lock = null;
+        try {
+            WifiManager wm = (WifiManager) getContext().getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm != null) { lock = wm.createWifiLock(android.os.Build.VERSION.SDK_INT >= 29 ? WifiManager.WIFI_MODE_FULL_LOW_LATENCY : WifiManager.WIFI_MODE_FULL_HIGH_PERF, "homesafe-backup"); lock.setReferenceCounted(false); lock.acquire(); }
+        } catch (Exception ignore) { /* a missing lock only costs speed */ }
+        try { runCopy(address, pin, id, token, items, t); }
+        finally { try { if (lock != null && lock.isHeld()) lock.release(); } catch (Exception ignore) { /* already released */ } }
+    }
+    private void runCopy(String address, String pin, String id, String token, List<Item> items, Transfer t) {
         try {
             // Pass 1: every file. A file that cannot be copied is parked and the next one starts.
             retrying(address, pin, id, token, t, (i, o) -> copyFrom(address, pin, id, token, items, t, i, o));
