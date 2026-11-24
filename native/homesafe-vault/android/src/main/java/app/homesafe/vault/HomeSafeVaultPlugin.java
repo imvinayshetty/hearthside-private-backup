@@ -423,6 +423,7 @@ public class HomeSafeVaultPlugin extends Plugin {
                 boolean paged = listing.length() > MANIFEST_PAGE;
                 body.put("name", name); body.put("kind", kind); body.put("files", paged ? new JSONArray() : listing);
                 if (basedOn != null && !basedOn.isEmpty()) body.put("basedOn", basedOn);
+                String mode = call.getString("mode"); if ("staged".equals(mode) || "direct".equals(mode)) body.put("mode", mode);
                 if (paged) { body.put("fileCount", listing.length()); body.put("bytes", total); }
                 JSONObject started = post(address, pin, "/v1/backup/start", body);
                 String id = started.getString("transferId"), token = started.getString("token");
@@ -652,7 +653,10 @@ public class HomeSafeVaultPlugin extends Plugin {
                 String address = call.getString("address"), pin;
                 if (address == null) { JSONObject saved = pairing(); address = saved.getString("address"); pin = saved.getString("pin"); }
                 else pin = clean(call.getString("fingerprint"));
-                call.resolve(JSObject.fromJSONObject(post(address, pin, "/v1/status", new TreeMap<>())));
+                Map<String, Object> ask = new TreeMap<>();
+                Long bytes = call.getLong("bytes"); if (bytes != null && bytes >= 0) ask.put("bytes", bytes);
+                if (Boolean.TRUE.equals(call.getBoolean("ask", false))) ask.put("ask", true);
+                call.resolve(JSObject.fromJSONObject(post(address, pin, "/v1/status", ask)));
             } catch (Exception e) { fail(call, e); }
         });
     }

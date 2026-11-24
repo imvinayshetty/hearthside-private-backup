@@ -278,6 +278,7 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
                 let paged = listing.count > Self.manifestPage
                 var body: [String: Any] = ["deviceId": deviceId, "challenge": challenge, "signature": signature, "name": name, "kind": kind, "files": paged ? [[String: Any]]() : listing]
                 if let basedOn, !basedOn.isEmpty { body["basedOn"] = basedOn }
+                if let mode = call.getString("mode"), mode == "staged" || mode == "direct" { body["mode"] = mode }
                 if paged { body["fileCount"] = listing.count; body["bytes"] = total }
                 let started = try await vault.post("/v1/backup/start", body)
                 guard let id = started["transferId"] as? String, let token = started["token"] as? String else { throw Failure("The Vault did not accept the backup.") }
@@ -513,7 +514,10 @@ public class HomeSafeVaultPlugin: CAPPlugin, CAPBridgedPlugin, UIDocumentPickerD
                     address = a; pin = p
                 }
                 try Vault.requirePrivate(address)
-                call.resolve(try await Vault(address: address, pin: pin).post("/v1/status", [:]))
+                var ask: [String: Any] = [:]
+                if let bytes = call.getInt("bytes"), bytes >= 0 { ask["bytes"] = bytes }
+                if call.getBool("ask") == true { ask["ask"] = true }
+                call.resolve(try await Vault(address: address, pin: pin).post("/v1/status", ask))
             } catch { self.fail(call, error) }
         }
     }

@@ -12,7 +12,9 @@ export const transferSchema = z.object({ state: z.enum(["running", "waiting", "r
 /** Wi-Fi speed, and how fast the Vault's drive and its staging folder write (bytes per second). */
 export const speedTestSchema = z.object({ networkBytesPerSecond: z.number().nonnegative(), driveBytesPerSecond: z.number().nonnegative().optional(), stagingBytesPerSecond: z.number().nonnegative().optional(), staging: z.boolean().default(false) });
 export type SpeedTest = z.infer<typeof speedTestSchema>;
-export const statusSchema = z.object({ connected: z.boolean(), driveName: z.string(), freeBytes: z.number().nonnegative().optional(), totalBytes: z.number().nonnegative().optional() });
+export const statusSchema = z.object({ connected: z.boolean(), driveName: z.string(), freeBytes: z.number().nonnegative().optional(), totalBytes: z.number().nonnegative().optional(), external: z.boolean().optional(),
+  /** Only for external drives: can this backup be received on the computer first? */
+  staging: z.object({ available: z.boolean(), ready: z.boolean(), needBytes: z.number().nonnegative().optional(), freeBytes: z.number().nonnegative().optional() }).optional() });
 export type DriveStatus = z.infer<typeof statusSchema>;
 export const compareSchema = z.discriminatedUnion("found", [z.object({ found: z.literal(false) }), z.object({ found: z.literal(true), name: z.string(), date: z.string(), files: z.number().nonnegative(), bytes: z.number().nonnegative(), changed: z.array(z.string()), changedCount: z.number().nonnegative(), changedBytes: z.number().nonnegative(), unchangedCount: z.number().nonnegative() })]);
 export type LocalSession = z.infer<typeof sessionSchema>;
@@ -30,11 +32,11 @@ export interface NativeVault {
   confirm(requestId: string): Promise<unknown>;
   catalog(): Promise<unknown>;
   pick(input: { kind: "Full" | "Custom" }): Promise<unknown>;
-  startBackup(input: { name: string; kind: "Full" | "Custom"; paths: string[]; basedOn?: string }): Promise<unknown>;
+  startBackup(input: { name: string; kind: "Full" | "Custom"; paths: string[]; basedOn?: string; mode?: "staged" | "direct" }): Promise<unknown>;
   compareWithLastFull(input: { paths: string[] }): Promise<unknown>;
   resolveProblems(input: { transferId: string; actions: { index: number; action: "retry" | "rename" | "skip"; name?: string }[] }): Promise<unknown>;
   cancelBackup(input: { transferId: string }): Promise<unknown>;
-  vaultStatus(input?: { address: string; fingerprint: string }): Promise<unknown>;
+  vaultStatus(input?: { address?: string; fingerprint?: string; bytes?: number; ask?: boolean }): Promise<unknown>;
   speedTest(): Promise<unknown>;
   transferStatus(transferId: string): Promise<unknown>;
   disconnect(): Promise<void>;

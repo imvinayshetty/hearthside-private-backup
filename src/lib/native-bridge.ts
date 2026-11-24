@@ -11,13 +11,14 @@ type Plugin = {
   confirm(i: { requestId: string }): Promise<unknown>;
   catalog(): Promise<unknown>;
   pick(i: { kind: "Full" | "Custom" }): Promise<unknown>;
-  startBackup(i: { name: string; kind: "Full" | "Custom"; paths: string[]; basedOn?: string }): Promise<unknown>;
+  startBackup(i: { name: string; kind: "Full" | "Custom"; paths: string[]; basedOn?: string; mode?: "staged" | "direct" }): Promise<unknown>;
   /** Which of these items are new or changed since this phone's last Full backup. */
   compareWithLastFull(i: { paths: string[] }): Promise<unknown>;
   resolveProblems(i: { transferId: string; actions: { index: number; action: "retry" | "rename" | "skip"; name?: string }[] }): Promise<unknown>;
   cancelBackup(i: { transferId: string }): Promise<unknown>;
   /** The drive a Vault saves to. No argument: the paired Vault. */
-  vaultStatus(i?: { address: string; fingerprint: string }): Promise<unknown>;
+  /** bytes: size of the coming backup, for the staging check; ask: also ask the owner on the Vault screen to choose a staging folder. */
+  vaultStatus(i?: { address?: string; fingerprint?: string; bytes?: number; ask?: boolean }): Promise<unknown>;
   /** Sends data that is thrown away for a few seconds and asks the Vault how fast its drive writes. */
   speedTest(): Promise<unknown>;
   transferStatus(i: { transferId: string }): Promise<unknown>;

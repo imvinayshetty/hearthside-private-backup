@@ -5,6 +5,7 @@ import { connectionInput } from "./ConnectionShell";
 import { defaultBackupName, requireAvailableBackup, type BackupKind } from "@/lib/backup-rules";
 import { compareSchema, handleVaultError, nativeVault, pickSchema, speedTestSchema, startSchema, transferSchema, withReconnect, type SpeedTest } from "@/lib/local-connection";
 import { createEtaEstimator } from "@/lib/eta";
+import { SaveRoute, type RouteState } from "./SaveRoute";
 import { vaultProblem } from "@/lib/vault-protocol";
 import type { z } from "zod";
 
@@ -38,6 +39,7 @@ export function NewBackup({ existing, onDone, onRepair, freeBytes }: { freeBytes
   const [renames, setRenames] = useState<Record<number, string>>({});
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const eta = useRef(createEtaEstimator());
+  const [route, setRoute] = useState<RouteState>({ external: false, route: null, ready: true });
   const [speed, setSpeed] = useState<SpeedTest | "testing" | null>(null);
   useEffect(() => () => { if (timer.current) clearInterval(timer.current); }, []);
 
@@ -76,7 +78,7 @@ export function NewBackup({ existing, onDone, onRepair, freeBytes }: { freeBytes
       const paths = mode === "Changes" ? (diff?.changed ?? []) : items.map(i => i.path);
       if (!paths.length) throw new Error(mode === "Changes" ? "Nothing has changed since your last Full backup." : kind === "Full" ? "Load your phone's files first." : "Choose at least one file or folder.");
       const bridge = nativeVault();
-      const { transferId } = startSchema.parse(await withReconnect(bridge, () => bridge.startBackup({ name: clean, kind, paths, ...(mode === "Changes" && diff ? { basedOn: diff.name } : {}) })));
+      const { transferId } = startSchema.parse(await withReconnect(bridge, () => bridge.startBackup({ name: clean, kind, paths, ...(mode === "Changes" && diff ? { basedOn: diff.name } : {}), ...(route.external && route.route ? { mode: route.route } : {}) })));
       setTransferId(transferId); setRenames({});
       setTransfer({ state: "running", problems: [], skippedCount: 0, sentBytes: 0, totalBytes: mode === "Changes" && diff ? diff.changedBytes : items.reduce((s, i) => s + i.bytes, 0) });
       timer.current = setInterval(async () => {
@@ -134,7 +136,9 @@ export function NewBackup({ existing, onDone, onRepair, freeBytes }: { freeBytes
     <label className="mt-5 block text-sm font-medium">Backup name<input aria-label="Backup name" className={connectionInput} value={name} disabled={running} onChange={e => setName(e.target.value)} aria-invalid={!!nameError} /></label>
     {nameError && <p role="alert" className="mt-2 text-xs leading-5 text-warn">{nameError} {name.trim().toLowerCase() === suggest(mode).toLowerCase() && `A backup already exists for today — add a suffix such as ${suggest(mode)}_2.`}</p>}
     {noRoom && <p role="alert" className="mt-3 text-xs leading-5 text-warn">This backup needs {mb(needed)} but the Vault drive has only {mb(freeBytes ?? 0)} free. Choose fewer files or free up space on the drive.</p>}
-    <PrimaryButton className="mt-5" disabled={busy || running || noRoom || !!nameError || (mode === "Changes" ? !diff?.changedCount : !items.length)} onClick={start}>{busy && mode !== "Changes" ? <Loader2 size={18} className="animate-spin motion-reduce:animate-none" /> : <Play size={18} />}Start backup</PrimaryButton>
+    {!running && !transfer && <SaveRoute needed={needed} onChange={setRoute} />}
+    {route.external && !route.route && !running && <p className="mt-2 text-xs text-slate">Choose how to save this backup to start it.</p>}
+    <PrimaryButton className="mt-5" disabled={busy || running || noRoom || !route.ready || !!nameError || (mode === "Changes" ? !diff?.changedCount : !items.length)} onClick={start}>{busy && mode !== "Changes" ? <Loader2 size={18} className="animate-spin motion-reduce:animate-none" /> : <Play size={18} />}Start backup</PrimaryButton>
     {transfer && <div role="status" className="mt-5 text-sm">
       {transfer.state === "review" && <div aria-label="Files to review" className="rounded-xl border border-warn/40 p-3">
         <p className="font-medium">{transfer.problems.length} {transfer.problems.length === 1 ? "file needs" : "files need"} your decision</p>
